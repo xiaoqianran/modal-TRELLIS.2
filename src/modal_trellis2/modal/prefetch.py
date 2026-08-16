@@ -14,6 +14,10 @@ from modal_trellis2.modal.weights import (
     DINOV3_LOCAL,
     DINOV3_REPO,
     DINOV3_URL,
+    RMBG_LOCAL,
+    RMBG_REPO,
+    SS_DEC_NAME,
+    SS_DEC_REPO,
     TRELLIS2_REPO,
 )
 
@@ -63,7 +67,11 @@ def prefetch_weights() -> dict[str, Any]:
     )
 
     extras: dict[str, Any] = {}
-    for repo, folder in ((DINOV3_REPO, DINOV3_LOCAL), (BIREFNET_REPO, BIREFNET_LOCAL)):
+    for repo, folder in (
+        (DINOV3_REPO, DINOV3_LOCAL),
+        (BIREFNET_REPO, BIREFNET_LOCAL),
+        (RMBG_REPO, RMBG_LOCAL),
+    ):
         dest_extra = _extra_dir(folder)
         try:
             snapshot_download(repo_id=repo, local_dir=dest_extra, token=token)
@@ -77,16 +85,21 @@ def prefetch_weights() -> dict[str, Any]:
         except Exception as exc:  # noqa: BLE001
             extras[repo] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
+    extras[SS_DEC_REPO] = _pin_sparse_structure_decoder(dest, token)
+
     model_volume.commit()
     pipeline = Path(dest) / "pipeline.json"
     dinov3_ok = bool(extras.get(DINOV3_REPO, {}).get("ok"))
+    ss_ok = bool(extras.get(SS_DEC_REPO, {}).get("ok"))
     return {
-        "ok": pipeline.is_file() and dinov3_ok,
+        "ok": pipeline.is_file() and dinov3_ok and ss_ok,
         "path": dest,
         "has_pipeline_json": pipeline.is_file(),
         "bytes": _dir_bytes(dest),
         "dinov3": extras.get(DINOV3_REPO),
         "birefnet": extras.get(BIREFNET_REPO),
+        "rmbg": extras.get(RMBG_REPO),
+        "ss_decoder": extras.get(SS_DEC_REPO),
         "dinov3_url": DINOV3_URL,
         "gpu_downloads": False,
     }
@@ -103,13 +116,16 @@ def prefetch_status() -> dict[str, Any]:
 
     dest = Path(MODEL_DIR) / "trellis2"
     pipeline = dest / "pipeline.json"
+    ss_dec = dest / "ckpts" / f"{SS_DEC_NAME}.safetensors"
     return {
-        "ok": pipeline.is_file() and _extra_ready(DINOV3_LOCAL),
+        "ok": pipeline.is_file() and _extra_ready(DINOV3_LOCAL) and ss_dec.is_file(),
         "path": str(dest),
         "has_pipeline_json": pipeline.is_file(),
         "bytes": _dir_bytes(dest) if dest.exists() else 0,
         "dinov3": _extra_ready(DINOV3_LOCAL),
         "birefnet": _extra_ready(BIREFNET_LOCAL),
+        "rmbg": _extra_ready(RMBG_LOCAL),
+        "ss_decoder": ss_dec.is_file(),
         "dinov3_path": _extra_dir(DINOV3_LOCAL),
         "birefnet_path": _extra_dir(BIREFNET_LOCAL),
         "dinov3_url": DINOV3_URL,
@@ -120,6 +136,36 @@ def prefetch_status() -> dict[str, Any]:
 @app.local_entrypoint()
 def main(status: bool = False) -> None:
     print(prefetch_status.remote() if status else prefetch_weights.remote())
+
+
+def _pin_sparse_structure_decoder(dest: str, token: str | None) -> dict[str, Any]:
+    """Official pipeline.json points this decoder at TRELLIS-image-large. Keep it local."""
+    import json
+    import shutil
+    from pathlib import Path
+
+    from huggingface_hub import hf_hub_download
+
+    ckpts = Path(dest) / "ckpts"
+    ckpts.mkdir(parents=True, exist_ok=True)
+    try:
+        for suffix in (".json", ".safetensors"):
+            downloaded = hf_hub_download(
+                SS_DEC_REPO,
+                f"ckpts/{SS_DEC_NAME}{suffix}",
+                token=token,
+            )
+            target = ckpts / f"{SS_DEC_NAME}{suffix}"
+            if Path(downloaded).resolve() != target.resolve():
+                shutil.copy2(downloaded, target)
+        pipe_path = Path(dest) / "pipeline.json"
+        spec = json.loads(pipe_path.read_text(encoding="utf-8"))
+        spec["args"]["models"]["sparse_structure_decoder"] = f"ckpts/{SS_DEC_NAME}"
+        pipe_path.write_text(json.dumps(spec, indent=2) + "\n", encoding="utf-8")
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    target = ckpts / f"{SS_DEC_NAME}.safetensors"
+    return {"ok": target.is_file(), "path": str(target), "bytes": target.stat().st_size if target.is_file() else 0}
 
 
 def _dir_bytes(path: str) -> int:

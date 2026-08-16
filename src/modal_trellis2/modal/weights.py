@@ -5,6 +5,9 @@ TRELLIS2_REPO = "microsoft/TRELLIS.2-4B"
 DINOV3_REPO = "facebook/dinov3-vitl16-pretrain-lvd1689m"
 DINOV3_URL = f"https://huggingface.co/{DINOV3_REPO}"
 BIREFNET_REPO = "ZhengPeng7/BiRefNet"
+RMBG_REPO = "briaai/RMBG-2.0"
+SS_DEC_REPO = "microsoft/TRELLIS-image-large"
+SS_DEC_NAME = "ss_dec_conv3d_16l8_fp16"
 
 # GPU must die quickly. Weights stay on the CPU Volume / memory snapshot.
 GPU_SCALEDOWN_SECONDS = 10
@@ -26,6 +29,7 @@ MODELS_1024: tuple[str, ...] = MODELS_512 + (
 # Stable Volume folders. Do not rely on huggingface_hub's xet/cache layout.
 DINOV3_LOCAL = "dinov3"
 BIREFNET_LOCAL = "birefnet"
+RMBG_LOCAL = "rmbg"
 
 # TRELLIS.2-4B is public. DINOv3 is gated and required by the official
 # image conditioner. BiRefNet is used to drop backgrounds on RGB inputs.

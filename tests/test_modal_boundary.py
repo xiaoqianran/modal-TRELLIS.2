@@ -46,6 +46,10 @@ def test_weight_repo_constants() -> None:
     assert BIREFNET_REPO.startswith("ZhengPeng7/")
     assert DINOV3_LOCAL == "dinov3"
     assert BIREFNET_LOCAL == "birefnet"
+    from modal_trellis2.modal.weights import SS_DEC_NAME, SS_DEC_REPO
+
+    assert SS_DEC_REPO == "microsoft/TRELLIS-image-large"
+    assert SS_DEC_NAME.startswith("ss_dec_")
 
 
 def test_cli_prefetch_and_deploy_help() -> None:

@@ -10,7 +10,7 @@ from modal_trellis2.core.preprocess import crop_to_foreground
 from modal_trellis2.modal.app import app
 from modal_trellis2.modal.image import cpu_runtime_image
 from modal_trellis2.modal.volumes import MODEL_DIR, model_volume
-from modal_trellis2.modal.weights import BIREFNET_LOCAL, BIREFNET_REPO
+from modal_trellis2.modal.weights import BIREFNET_LOCAL, BIREFNET_REPO, RMBG_LOCAL, RMBG_REPO
 
 # CPU rembg. This module must not import Trellis2Worker.
 
@@ -36,8 +36,14 @@ class CpuPreprocessor:
         from torchvision import transforms
 
         model_volume.reload()
-        local = f"{MODEL_DIR}/{BIREFNET_LOCAL}"
-        source = local if os.path.isfile(os.path.join(local, "config.json")) else BIREFNET_REPO
+        rmbg = f"{MODEL_DIR}/{RMBG_LOCAL}"
+        biref = f"{MODEL_DIR}/{BIREFNET_LOCAL}"
+        if os.path.isfile(os.path.join(rmbg, "config.json")):
+            source = rmbg
+        elif os.path.isfile(os.path.join(biref, "config.json")):
+            source = biref
+        else:
+            source = RMBG_REPO
         try:
             self.model = AutoModelForImageSegmentation.from_pretrained(
                 source,
