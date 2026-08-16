@@ -18,6 +18,7 @@ from modal_trellis2.modal.volumes import MODEL_DIR, RESULTS_DIR, model_volume, r
     secrets=[huggingface_secret()],
     timeout=30 * 60,
     scaledown_window=10,
+    retries=0,
 )
 class Trellis2Worker:
     """Official TRELLIS.2 image-to-3D. Keep this file the only place that imports trellis2."""
