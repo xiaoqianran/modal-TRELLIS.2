@@ -24,6 +24,7 @@ outputs/
 .modal/
 .codegraph/
 .agents/
+.claude/skills/modal/
 
 # Upstream clones + CodeGraph indexes live here locally.
 vendor/
