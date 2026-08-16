@@ -17,7 +17,7 @@ from modal_trellis2.modal.volumes import MODEL_DIR, RESULTS_DIR, model_volume, r
     volumes={MODEL_DIR: model_volume, RESULTS_DIR: results_volume},
     secrets=[huggingface_secret()],
     timeout=30 * 60,
-    scaledown_window=10,
+    scaledown_window=300,
     retries=0,
 )
 class Trellis2Worker:
