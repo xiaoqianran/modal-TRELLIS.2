@@ -59,7 +59,7 @@ modal secret create --force huggingface-secret \
 modal skills install --yes --claude
 ```
 
-`TRELLIS.2-4B` 目前不需要额外 license 点击。Civitai / GitHub token 留给以后的资源，这版推理只用 `HF_TOKEN`。
+`TRELLIS.2-4B` 本身目前是公开的。官方图像编码器 [facebook/dinov3-vitl16-pretrain-lvd1689m](https://huggingface.co/facebook/dinov3-vitl16-pretrain-lvd1689m) **是 gated**：要用和 `HF_TOKEN` 同一账号点同意，再 `modal-trellis2 prefetch`。Civitai / GitHub token 留给以后的资源。
 
 ## 下一步
 

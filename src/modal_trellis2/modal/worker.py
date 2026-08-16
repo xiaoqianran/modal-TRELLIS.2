@@ -37,13 +37,23 @@ class Trellis2Worker:
         if token:
             login(token=token, add_to_git_credential=False)
 
+        from huggingface_hub.errors import GatedRepoError
         from trellis2.pipelines import Trellis2ImageTo3DPipeline
         import o_voxel
 
+        from modal_trellis2.modal.weights import DINOV3_URL, TRELLIS2_REPO
+
         weights = f"{MODEL_DIR}/trellis2"
-        source = weights if os.path.exists(f"{weights}/pipeline.json") else "microsoft/TRELLIS.2-4B"
+        source = weights if os.path.exists(f"{weights}/pipeline.json") else TRELLIS2_REPO
         self.weights_source = source
-        self.pipeline = Trellis2ImageTo3DPipeline.from_pretrained(source)
+        try:
+            self.pipeline = Trellis2ImageTo3DPipeline.from_pretrained(source)
+        except GatedRepoError as exc:
+            raise RuntimeError(
+                "TRELLIS.2 needs the gated DINOv3 image encoder. "
+                f"Accept the license at {DINOV3_URL} with the same HF account as HF_TOKEN, "
+                "then run `modal-trellis2 prefetch` again."
+            ) from exc
         self.pipeline.cuda()
         self.o_voxel = o_voxel
 

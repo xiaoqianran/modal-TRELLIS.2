@@ -8,9 +8,19 @@ import modal
 from modal_trellis2.modal.app import app, huggingface_secret
 from modal_trellis2.modal.image import cpu_image
 from modal_trellis2.modal.volumes import MODEL_DIR, model_volume
+from modal_trellis2.modal.weights import BIREFNET_REPO, DINOV3_REPO, DINOV3_URL, TRELLIS2_REPO
 
 # This module must not import Trellis2Worker. `modal run -m` would otherwise
 # build the CUDA image just to download weights.
+
+
+def _hf_env() -> None:
+    os.environ["HF_HOME"] = MODEL_DIR
+    os.environ["HF_HUB_CACHE"] = f"{MODEL_DIR}/cache"
+
+
+def _cache_repo_dir(repo_id: str) -> str:
+    return f"{MODEL_DIR}/cache/models--{repo_id.replace('/', '--')}"
 
 
 @app.function(
@@ -20,28 +30,50 @@ from modal_trellis2.modal.volumes import MODEL_DIR, model_volume
     timeout=3600,
 )
 def prefetch_weights() -> dict[str, Any]:
-    """CPU download of microsoft/TRELLIS.2-4B into the Modal volume."""
+    """CPU download of TRELLIS.2-4B plus DINOv3 / BiRefNet into the Volume."""
     from pathlib import Path
 
     from huggingface_hub import login, snapshot_download
+    from huggingface_hub.errors import GatedRepoError
 
+    _hf_env()
     token = os.environ.get("HF_TOKEN")
     if token:
         login(token=token, add_to_git_credential=False)
+
     dest = f"{MODEL_DIR}/trellis2"
     snapshot_download(
-        repo_id="microsoft/TRELLIS.2-4B",
+        repo_id=TRELLIS2_REPO,
         local_dir=dest,
         ignore_patterns=["*.md", "*.txt"],
         token=token,
     )
+
+    extras: dict[str, Any] = {}
+    for repo in (DINOV3_REPO, BIREFNET_REPO):
+        try:
+            snapshot_download(repo_id=repo, token=token)
+            extras[repo] = {"ok": True, "path": _cache_repo_dir(repo)}
+        except GatedRepoError:
+            extras[repo] = {
+                "ok": False,
+                "gated": True,
+                "error": f"HF account cannot read {repo}. Accept the license at {DINOV3_URL}",
+            }
+        except Exception as exc:  # noqa: BLE001
+            extras[repo] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
     model_volume.commit()
     pipeline = Path(dest) / "pipeline.json"
+    dinov3_ok = bool(extras.get(DINOV3_REPO, {}).get("ok"))
     return {
-        "ok": pipeline.is_file(),
+        "ok": pipeline.is_file() and dinov3_ok,
         "path": dest,
         "has_pipeline_json": pipeline.is_file(),
         "bytes": _dir_bytes(dest),
+        "dinov3": extras.get(DINOV3_REPO),
+        "birefnet": extras.get(BIREFNET_REPO),
+        "dinov3_url": DINOV3_URL,
     }
 
 
@@ -56,11 +88,16 @@ def prefetch_status() -> dict[str, Any]:
 
     dest = Path(MODEL_DIR) / "trellis2"
     pipeline = dest / "pipeline.json"
+    dinov3 = Path(_cache_repo_dir(DINOV3_REPO))
+    birefnet = Path(_cache_repo_dir(BIREFNET_REPO))
     return {
-        "ok": pipeline.is_file(),
+        "ok": pipeline.is_file() and dinov3.exists(),
         "path": str(dest),
         "has_pipeline_json": pipeline.is_file(),
         "bytes": _dir_bytes(dest) if dest.exists() else 0,
+        "dinov3": dinov3.exists(),
+        "birefnet": birefnet.exists(),
+        "dinov3_url": DINOV3_URL,
     }
 
 

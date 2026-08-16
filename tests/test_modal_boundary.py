@@ -20,6 +20,15 @@ def test_prefetch_module_does_not_import_worker() -> None:
     assert hasattr(modal_trellis2.modal.prefetch, "prefetch_status")
 
 
+def test_weight_repo_constants() -> None:
+    from modal_trellis2.modal.weights import BIREFNET_REPO, DINOV3_REPO, DINOV3_URL, TRELLIS2_REPO
+
+    assert TRELLIS2_REPO == "microsoft/TRELLIS.2-4B"
+    assert DINOV3_REPO.startswith("facebook/dinov3")
+    assert DINOV3_URL.startswith("https://huggingface.co/")
+    assert BIREFNET_REPO.startswith("ZhengPeng7/")
+
+
 def test_cli_prefetch_and_deploy_help() -> None:
     prefetch = runner.invoke(app, ["prefetch", "--help"])
     assert prefetch.exit_code == 0, prefetch.output

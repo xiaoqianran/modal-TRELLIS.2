@@ -31,7 +31,8 @@ Local CLI/Web own jobs and the GLB workbench. Modal owns GPU inference.
 
 - Contract: image bytes → `ImageTo3DGenerator` → GLB bytes
 - Default path is `--dry-run` / `MockGenerator`
-- Weights: `modal run -m modal_trellis2.modal.prefetch` (CPU image only) writes `/models/trellis2` and `commit()`s
+- Weights: `modal run -m modal_trellis2.modal.prefetch` (CPU image only) writes `/models/trellis2` plus HF cache copies of DINOv3 / BiRefNet, then `commit()`s
+- Live GPU also needs gated `facebook/dinov3-vitl16-pretrain-lvd1689m` accepted on the HF account behind `HF_TOKEN`
 - Do **not** `modal run -m modal_trellis2.modal.worker` just to prefetch — that file registers `Trellis2Worker` and builds CUDA
 - GPU `Trellis2Worker` loads that snapshot when `pipeline.json` exists
 - Deploy: `modal-trellis2 deploy` or `modal deploy -m modal_trellis2.modal.worker`
