@@ -133,6 +133,36 @@ class Trellis2Worker:
         }
 
     @modal.method()
+    def warmup(self, image_bytes: bytes, seed: int = 42, pipeline_type: str = "512") -> dict[str, Any]:
+        """Compile/warm CUDA kernels without running GLB postprocessing."""
+        import time
+
+        import torch
+        from PIL import Image
+
+        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        started = time.perf_counter()
+        mesh = self.pipeline.run(
+            image,
+            seed=seed,
+            pipeline_type=pipeline_type,
+            preprocess_image=False,
+        )[0]
+        torch.cuda.synchronize()
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        vertices = int(mesh.vertices.shape[0])
+        faces = int(mesh.faces.shape[0])
+        del mesh
+        torch.cuda.empty_cache()
+        return {
+            "ok": True,
+            "latency_ms": elapsed_ms,
+            "vertices": vertices,
+            "faces": faces,
+            "pipeline": pipeline_type,
+        }
+
+    @modal.method()
     def generate(
         self,
         image_bytes: bytes,
