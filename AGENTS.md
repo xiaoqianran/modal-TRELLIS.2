@@ -31,10 +31,11 @@ Local CLI/Web own jobs and the GLB workbench. Modal owns GPU inference.
 
 - Contract: image bytes → `ImageTo3DGenerator` → GLB bytes
 - Default path is `--dry-run` / `MockGenerator`
-- Weights: CPU `prefetch_weights` writes `/models/trellis2` on Volume and `commit()`s
+- Weights: `modal run -m modal_trellis2.modal.prefetch` (CPU image only) writes `/models/trellis2` and `commit()`s
+- Do **not** `modal run -m modal_trellis2.modal.worker` just to prefetch — that file registers `Trellis2Worker` and builds CUDA
 - GPU `Trellis2Worker` loads that snapshot when `pipeline.json` exists
-- Deploy: `modal deploy -m modal_trellis2.modal.worker`
-- Smoke: `modal run -m modal_trellis2.modal.smoke`
+- Deploy: `modal-trellis2 deploy` or `modal deploy -m modal_trellis2.modal.worker`
+- Smoke: `modal run -m modal_trellis2.modal.smoke` (secret) / `modal run -m modal_trellis2.modal.gpu_smoke` (CUDA image + A100)
 - Local web/CLI are **not** `modal serve`
 
 Tokens live in Modal secret `huggingface-secret` (`HF_TOKEN`, `CIVITAI_TOKEN`, `GITHUB_TOKEN`). Never commit them.

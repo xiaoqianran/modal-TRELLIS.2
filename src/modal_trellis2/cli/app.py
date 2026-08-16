@@ -87,11 +87,11 @@ def doctor() -> None:
 def prefetch(
     status_only: bool = typer.Option(False, "--status", help="Only inspect the Volume"),
 ) -> None:
-    """Download TRELLIS.2-4B onto the Modal Volume (CPU)."""
+    """Download TRELLIS.2-4B onto the Modal Volume (CPU image only)."""
     import modal
 
     from modal_trellis2.modal.app import app as modal_app
-    from modal_trellis2.modal.worker import prefetch_status, prefetch_weights
+    from modal_trellis2.modal.prefetch import prefetch_status, prefetch_weights
 
     if not status_only:
         console.print("prefetching microsoft/TRELLIS.2-4B onto the Modal Volume…")
@@ -99,6 +99,28 @@ def prefetch(
         with modal_app.run():
             payload = prefetch_status.remote() if status_only else prefetch_weights.remote()
     console.print(payload)
+
+
+@app.command()
+def deploy() -> None:
+    """Build the CUDA image and deploy Trellis2Worker."""
+    import subprocess
+    import sys
+
+    cmd = [sys.executable, "-m", "modal", "deploy", "-m", "modal_trellis2.modal.worker"]
+    console.print(" ".join(cmd))
+    raise typer.Exit(subprocess.call(cmd))
+
+
+@app.command("gpu-smoke")
+def gpu_smoke() -> None:
+    """Build the TRELLIS CUDA image and ping an A100. Does not load weights."""
+    import subprocess
+    import sys
+
+    cmd = [sys.executable, "-m", "modal", "run", "-m", "modal_trellis2.modal.gpu_smoke"]
+    console.print(" ".join(cmd))
+    raise typer.Exit(subprocess.call(cmd))
 
 
 @app.command()

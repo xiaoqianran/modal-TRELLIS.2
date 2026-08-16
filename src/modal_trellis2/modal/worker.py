@@ -7,73 +7,8 @@ from typing import Any
 import modal
 
 from modal_trellis2.modal.app import app, huggingface_secret
-from modal_trellis2.modal.image import cpu_image, trellis2_image
+from modal_trellis2.modal.image import trellis2_image
 from modal_trellis2.modal.volumes import MODEL_DIR, RESULTS_DIR, model_volume, results_volume
-
-
-@app.function(
-    image=cpu_image,
-    volumes={MODEL_DIR: model_volume},
-    secrets=[huggingface_secret()],
-    timeout=3600,
-)
-def prefetch_weights() -> dict[str, Any]:
-    """CPU download of microsoft/TRELLIS.2-4B into the Modal volume."""
-    import os
-    from pathlib import Path
-
-    from huggingface_hub import login, snapshot_download
-
-    token = os.environ.get("HF_TOKEN")
-    if token:
-        login(token=token, add_to_git_credential=False)
-    dest = f"{MODEL_DIR}/trellis2"
-    snapshot_download(
-        repo_id="microsoft/TRELLIS.2-4B",
-        local_dir=dest,
-        ignore_patterns=["*.md", "*.txt"],
-        token=token,
-    )
-    model_volume.commit()
-    pipeline = Path(dest) / "pipeline.json"
-    return {
-        "ok": pipeline.is_file(),
-        "path": dest,
-        "has_pipeline_json": pipeline.is_file(),
-        "bytes": _dir_bytes(dest),
-    }
-
-
-@app.function(
-    image=cpu_image,
-    volumes={MODEL_DIR: model_volume},
-    timeout=120,
-)
-def prefetch_status() -> dict[str, Any]:
-    """Inspect the Volume without downloading."""
-    from pathlib import Path
-
-    dest = Path(MODEL_DIR) / "trellis2"
-    pipeline = dest / "pipeline.json"
-    return {
-        "ok": pipeline.is_file(),
-        "path": str(dest),
-        "has_pipeline_json": pipeline.is_file(),
-        "bytes": _dir_bytes(dest) if dest.exists() else 0,
-    }
-
-
-@app.local_entrypoint()
-def main(status: bool = False) -> None:
-    print(prefetch_status.remote() if status else prefetch_weights.remote())
-
-
-def _dir_bytes(path: str) -> int:
-    total = 0
-    for root, _dirs, files in os.walk(path):
-        for name in files:
-            total += os.path.getsize(os.path.join(root, name))
-    return total
 
 
 @app.cls(
@@ -81,7 +16,7 @@ def _dir_bytes(path: str) -> int:
     image=trellis2_image,
     volumes={MODEL_DIR: model_volume, RESULTS_DIR: results_volume},
     secrets=[huggingface_secret()],
-    timeout=20 * 60,
+    timeout=30 * 60,
     scaledown_window=10,
 )
 class Trellis2Worker:
@@ -89,11 +24,11 @@ class Trellis2Worker:
 
     @modal.enter()
     def setup(self) -> None:
-        import os
         import sys
 
         from huggingface_hub import login
 
+        model_volume.reload()
         if "/root/TRELLIS.2" not in sys.path:
             sys.path.insert(0, "/root/TRELLIS.2")
         os.environ["HF_HOME"] = MODEL_DIR
@@ -107,9 +42,24 @@ class Trellis2Worker:
 
         weights = f"{MODEL_DIR}/trellis2"
         source = weights if os.path.exists(f"{weights}/pipeline.json") else "microsoft/TRELLIS.2-4B"
+        self.weights_source = source
         self.pipeline = Trellis2ImageTo3DPipeline.from_pretrained(source)
         self.pipeline.cuda()
         self.o_voxel = o_voxel
+
+    @modal.method()
+    def health(self) -> dict[str, Any]:
+        """Confirm the GPU container loaded the official pipeline. Starts a GPU."""
+        import torch
+
+        weights = f"{MODEL_DIR}/trellis2"
+        return {
+            "ok": self.pipeline is not None,
+            "cuda": torch.cuda.is_available(),
+            "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+            "weights_local": os.path.exists(f"{weights}/pipeline.json"),
+            "source": getattr(self, "weights_source", weights),
+        }
 
     @modal.method()
     def generate(
@@ -155,4 +105,5 @@ class Trellis2Worker:
             "pipeline": pipeline_type,
             "seed": seed,
             "size_bytes": len(payload),
+            "source": getattr(self, "weights_source", f"{MODEL_DIR}/trellis2"),
         }

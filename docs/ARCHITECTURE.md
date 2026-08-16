@@ -30,9 +30,9 @@ ImageTo3DGenerator
     ├── MockGenerator           --dry-run / 测试
     └── ModalTrellis2Generator  已 deploy 的 Trellis2Worker
             ↓
-        prefetch_weights (CPU, Volume)
+        prefetch.py  prefetch_weights (CPU image, Volume)
             ↓
-        Trellis2Worker.generate (GPU)
+        worker.py    Trellis2Worker.generate (GPU)
             pipeline.run → o_voxel.to_glb → bytes
 ```
 

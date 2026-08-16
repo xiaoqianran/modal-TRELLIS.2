@@ -64,10 +64,12 @@ modal skills install --yes --claude
 ## 下一步
 
 1. `modal run -m modal_trellis2.modal.smoke` 确认账号和 secret
-2. `modal-trellis2 prefetch` 把 4B 权重拉进 Volume（CPU）
-3. `modal deploy -m modal_trellis2.modal.worker`
+2. `modal-trellis2 prefetch` 把 4B 权重拉进 Volume（**只编 CPU 镜像**）
+3. `modal-trellis2 deploy`（或 `modal deploy -m modal_trellis2.modal.worker`）
 4. 工作台关掉 dry-run，**只开 `512` 管线** 打第一枪
 5. 官方路径稳定后再接 [fast-trellis2](https://github.com/Archerkattri/fast-trellis2) 的 sampler
+
+`modal run -m modal_trellis2.modal.worker` 会编 CUDA 栈。查权重用 `modal-trellis2 prefetch --status` 或 `modal run -m modal_trellis2.modal.prefetch --status`。可选：`modal-trellis2 gpu-smoke` 只验证镜像和 A100，不加载权重。
 
 ## 本地对照上游
 
