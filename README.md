@@ -50,11 +50,22 @@ image=<file>&pipeline=512&seed=42&dry_run=true
 
 `GET /api/assets/{id}.glb` 的 `Content-Type` 是 `model/gltf-binary`。
 
-## 下一步（先别做）
+## 凭证（不要写进 git）
 
-1. HuggingFace 同意 [TRELLIS.2-4B](https://huggingface.co/microsoft/TRELLIS.2-4B)，`modal secret create huggingface-secret HF_TOKEN=…`
-2. `modal deploy -m modal_trellis2.modal.worker`
-3. `modal run -m modal_trellis2.modal.worker::prefetch_weights`
+```bash
+modal token set --token-id "$MODAL_TOKEN_ID" --token-secret "$MODAL_TOKEN_SECRET"
+modal secret create --force huggingface-secret \
+  HF_TOKEN="$HF_TOKEN" CIVITAI_TOKEN="$CIVITAI_TOKEN" GITHUB_TOKEN="$GITHUB_TOKEN"
+modal skills install --yes --claude
+```
+
+`TRELLIS.2-4B` 目前不需要额外 license 点击。Civitai / GitHub token 留给以后的资源，这版推理只用 `HF_TOKEN`。
+
+## 下一步
+
+1. `modal run -m modal_trellis2.modal.smoke` 确认账号和 secret
+2. `modal-trellis2 prefetch` 把 4B 权重拉进 Volume（CPU）
+3. `modal deploy -m modal_trellis2.modal.worker`
 4. 工作台关掉 dry-run，**只开 `512` 管线** 打第一枪
 5. 官方路径稳定后再接 [fast-trellis2](https://github.com/Archerkattri/fast-trellis2) 的 sampler
 

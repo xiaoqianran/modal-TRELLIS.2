@@ -1,17 +1,18 @@
 from __future__ import annotations
 
 import io
+import os
 from typing import Any
 
 import modal
 
 from modal_trellis2.modal.app import app, huggingface_secret
-from modal_trellis2.modal.image import trellis2_image
+from modal_trellis2.modal.image import cpu_image, trellis2_image
 from modal_trellis2.modal.volumes import MODEL_DIR, RESULTS_DIR, model_volume, results_volume
 
 
 @app.function(
-    image=trellis2_image,
+    image=cpu_image,
     volumes={MODEL_DIR: model_volume},
     secrets=[huggingface_secret()],
     timeout=3600,
@@ -19,6 +20,7 @@ from modal_trellis2.modal.volumes import MODEL_DIR, RESULTS_DIR, model_volume, r
 def prefetch_weights() -> dict[str, Any]:
     """CPU download of microsoft/TRELLIS.2-4B into the Modal volume."""
     import os
+    from pathlib import Path
 
     from huggingface_hub import login, snapshot_download
 
@@ -33,7 +35,45 @@ def prefetch_weights() -> dict[str, Any]:
         token=token,
     )
     model_volume.commit()
-    return {"ok": True, "path": dest}
+    pipeline = Path(dest) / "pipeline.json"
+    return {
+        "ok": pipeline.is_file(),
+        "path": dest,
+        "has_pipeline_json": pipeline.is_file(),
+        "bytes": _dir_bytes(dest),
+    }
+
+
+@app.function(
+    image=cpu_image,
+    volumes={MODEL_DIR: model_volume},
+    timeout=120,
+)
+def prefetch_status() -> dict[str, Any]:
+    """Inspect the Volume without downloading."""
+    from pathlib import Path
+
+    dest = Path(MODEL_DIR) / "trellis2"
+    pipeline = dest / "pipeline.json"
+    return {
+        "ok": pipeline.is_file(),
+        "path": str(dest),
+        "has_pipeline_json": pipeline.is_file(),
+        "bytes": _dir_bytes(dest) if dest.exists() else 0,
+    }
+
+
+@app.local_entrypoint()
+def main(status: bool = False) -> None:
+    print(prefetch_status.remote() if status else prefetch_weights.remote())
+
+
+def _dir_bytes(path: str) -> int:
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for name in files:
+            total += os.path.getsize(os.path.join(root, name))
+    return total
 
 
 @app.cls(

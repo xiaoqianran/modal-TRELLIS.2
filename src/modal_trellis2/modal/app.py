@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import modal
 
-from modal_trellis2.modal.image import trellis2_image
+from modal_trellis2.modal.image import cpu_image, trellis2_image
 from modal_trellis2.modal.volumes import MODEL_DIR, RESULTS_DIR, model_volume, results_volume
 
 APP_NAME = "modal-trellis2"
@@ -22,5 +22,6 @@ __all__ = [
     "huggingface_secret",
     "model_volume",
     "results_volume",
+    "cpu_image",
     "trellis2_image",
 ]

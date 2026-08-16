@@ -1,13 +1,42 @@
 # Agent notes
 
-This repo follows the same split as `modal-sana`:
+## Modal skills
 
-- `src/modal_trellis2/core/` — image in, GLB out. No torch. No TRELLIS imports.
-- `src/modal_trellis2/modal/` — the only place that may import `trellis2` / `o_voxel`.
-- `src/modal_trellis2/web/` and `cli/` — thin interfaces over `GenerateService`.
+Official Modal skill (version-aligned docs):
 
-Default path is `--dry-run` / `MockGenerator`. Do not make the first web loop depend on a live GPU.
+```bash
+modal skills install --yes --claude
+modal skills show
+```
 
-Upstream clones belong in `vendor/` and stay gitignored. Refresh with `scripts/fetch-upstream.sh` and `scripts/index-upstream.sh`.
+This repo also vendors [modal-auto-research-skills](https://github.com/modal-projects/modal-auto-research-skills.git) under `.claude/skills/`. Use them for GPU / Modal work:
 
-Read `docs/ARCHITECTURE.md` before adding models, post-process pipelines, or a React shell.
+- `modal` — current SDK docs bundled by `modal skills install`
+- `modal-basic-skills` — app as a package, `modal deploy -m`, lazy `from_name()`, CLI
+- `modal-gpu-dev` — interactive GPU sandboxes
+- `modal-gpu-experiment` — volumes, secrets, retries, checkpoints
+- `sub-agents` — parallel agents across GPUs
+
+Refresh the research pack:
+
+```bash
+git clone https://github.com/modal-projects/modal-auto-research-skills.git /tmp/modal-auto-research-skills
+cp -R /tmp/modal-auto-research-skills/{modal-basic-skills,modal-gpu-dev,modal-gpu-experiment,sub-agents} \
+  .claude/skills/
+```
+
+## Architecture
+
+Local CLI/Web own jobs and the GLB workbench. Modal owns GPU inference.
+
+- Contract: image bytes → `ImageTo3DGenerator` → GLB bytes
+- Default path is `--dry-run` / `MockGenerator`
+- Weights: CPU `prefetch_weights` writes `/models/trellis2` on Volume and `commit()`s
+- GPU `Trellis2Worker` loads that snapshot when `pipeline.json` exists
+- Deploy: `modal deploy -m modal_trellis2.modal.worker`
+- Smoke: `modal run -m modal_trellis2.modal.smoke`
+- Local web/CLI are **not** `modal serve`
+
+Tokens live in Modal secret `huggingface-secret` (`HF_TOKEN`, `CIVITAI_TOKEN`, `GITHUB_TOKEN`). Never commit them.
+
+Upstream clones belong in `vendor/` and stay gitignored. Refresh with `scripts/fetch-upstream.sh`.

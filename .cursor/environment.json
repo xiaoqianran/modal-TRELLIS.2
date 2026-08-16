@@ -1,0 +1,4 @@
+{
+  "name": "modal-TRELLIS.2",
+  "install": "bash scripts/cloud-agent-install.sh"
+}

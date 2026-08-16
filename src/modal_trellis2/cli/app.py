@@ -84,6 +84,24 @@ def doctor() -> None:
 
 
 @app.command()
+def prefetch(
+    status_only: bool = typer.Option(False, "--status", help="Only inspect the Volume"),
+) -> None:
+    """Download TRELLIS.2-4B onto the Modal Volume (CPU)."""
+    import modal
+
+    from modal_trellis2.modal.app import app as modal_app
+    from modal_trellis2.modal.worker import prefetch_status, prefetch_weights
+
+    if not status_only:
+        console.print("prefetching microsoft/TRELLIS.2-4B onto the Modal Volume…")
+    with modal.enable_output():
+        with modal_app.run():
+            payload = prefetch_status.remote() if status_only else prefetch_weights.remote()
+    console.print(payload)
+
+
+@app.command()
 def web(
     host: str = typer.Option("127.0.0.1", "--host"),
     port: int | None = typer.Option(None, "--port"),
