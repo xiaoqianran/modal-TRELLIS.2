@@ -44,6 +44,16 @@ def _use_local_dinov3() -> None:
     DinoV3FeatureExtractor.__init__ = patched  # type: ignore[method-assign]
 
 
+def _skip_gpu_rembg() -> None:
+    """Do not construct BiRefNet in the GPU container; CPU already removed background."""
+    from trellis2.pipelines import rembg
+
+    def no_op(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+    rembg.BiRefNet.__init__ = no_op
+
+
 def _require_local_weights() -> str:
     weights = f"{MODEL_DIR}/trellis2"
     if not os.path.exists(f"{weights}/pipeline.json"):
@@ -83,12 +93,16 @@ class Trellis2Worker:
         _offline_env()
         weights = _require_local_weights()
         _use_local_dinov3()
+        _skip_gpu_rembg()
 
         from trellis2.pipelines import Trellis2ImageTo3DPipeline
 
         Trellis2ImageTo3DPipeline.model_names_to_load = list(MODELS_512)
         self.pipeline = Trellis2ImageTo3DPipeline.from_pretrained(weights)
         self.pipeline.rembg_model = None
+        # 512-only weights fit these 80–96 GB GPUs. Keeping every stage resident
+        # removes six CPU↔GPU transfers that dominated the earlier 178 s run.
+        self.pipeline.low_vram = False
         self.weights_source = weights
 
     @modal.enter(snap=False)
@@ -112,6 +126,8 @@ class Trellis2Worker:
             "weights_local": os.path.exists(f"{weights}/pipeline.json"),
             "source": getattr(self, "weights_source", weights),
             "offline": os.environ.get("HF_HUB_OFFLINE") == "1",
+            "low_vram": self.pipeline.low_vram,
+            "vram_gb": round(torch.cuda.get_device_properties(0).total_memory / 2**30, 1),
             "scaledown_window": GPU_SCALEDOWN_SECONDS,
             "repo": TRELLIS2_REPO,
         }
