@@ -11,8 +11,9 @@ class ModalTrellis2Generator:
     def generate(self, request: GenerateRequest) -> GenerateResult:
         started = time.perf_counter()
         try:
+            import modal
+
             from modal_trellis2.modal.app import APP_NAME
-            from modal_trellis2.modal.worker import Trellis2Worker
         except Exception as exc:  # noqa: BLE001
             return GenerateResult(
                 job_id=request.job_id,
@@ -20,9 +21,9 @@ class ModalTrellis2Generator:
                 latency_ms=(time.perf_counter() - started) * 1000,
             )
         try:
-            worker = Trellis2Worker.with_options(gpu=request.gpu)
-            remote = worker.from_name(APP_NAME)
-            payload = remote.generate.remote(
+            cls = modal.Cls.from_name(APP_NAME, "Trellis2Worker")
+            worker = cls.with_options(gpu=request.gpu)()
+            payload = worker.generate.remote(
                 request.image_bytes,
                 seed=request.seed,
                 pipeline_type=request.pipeline,
