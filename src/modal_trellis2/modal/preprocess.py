@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import os
 from typing import Any
 
 import modal
@@ -9,7 +10,7 @@ from modal_trellis2.core.preprocess import crop_to_foreground
 from modal_trellis2.modal.app import app
 from modal_trellis2.modal.image import cpu_runtime_image
 from modal_trellis2.modal.volumes import MODEL_DIR, model_volume
-from modal_trellis2.modal.weights import BIREFNET_REPO
+from modal_trellis2.modal.weights import BIREFNET_LOCAL, BIREFNET_REPO
 
 # CPU rembg. This module must not import Trellis2Worker.
 
@@ -22,7 +23,6 @@ from modal_trellis2.modal.weights import BIREFNET_REPO
     retries=0,
     env={
         "HF_HOME": MODEL_DIR,
-        "HF_HUB_CACHE": f"{MODEL_DIR}/cache",
         "HF_HUB_OFFLINE": "1",
         "TRANSFORMERS_OFFLINE": "1",
     },
@@ -36,9 +36,11 @@ class CpuPreprocessor:
         from torchvision import transforms
 
         model_volume.reload()
+        local = f"{MODEL_DIR}/{BIREFNET_LOCAL}"
+        source = local if os.path.isfile(os.path.join(local, "config.json")) else BIREFNET_REPO
         try:
             self.model = AutoModelForImageSegmentation.from_pretrained(
-                BIREFNET_REPO,
+                source,
                 trust_remote_code=True,
                 local_files_only=True,
             )

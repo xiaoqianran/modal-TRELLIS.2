@@ -23,6 +23,10 @@ MODELS_1024: tuple[str, ...] = MODELS_512 + (
     "tex_slat_flow_model_1024",
 )
 
+# Stable Volume folders. Do not rely on huggingface_hub's xet/cache layout.
+DINOV3_LOCAL = "dinov3"
+BIREFNET_LOCAL = "birefnet"
+
 # TRELLIS.2-4B is public. DINOv3 is gated and required by the official
 # image conditioner. BiRefNet is used to drop backgrounds on RGB inputs.
 # Downloads happen only on the CPU prefetch image. The GPU is offline.

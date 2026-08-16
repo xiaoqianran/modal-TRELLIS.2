@@ -8,7 +8,14 @@ import modal
 from modal_trellis2.modal.app import app, huggingface_secret
 from modal_trellis2.modal.image import cpu_image
 from modal_trellis2.modal.volumes import MODEL_DIR, model_volume
-from modal_trellis2.modal.weights import BIREFNET_REPO, DINOV3_REPO, DINOV3_URL, TRELLIS2_REPO
+from modal_trellis2.modal.weights import (
+    BIREFNET_LOCAL,
+    BIREFNET_REPO,
+    DINOV3_LOCAL,
+    DINOV3_REPO,
+    DINOV3_URL,
+    TRELLIS2_REPO,
+)
 
 # This module must not import Trellis2Worker. `modal run -m` would otherwise
 # build the CUDA image just to download weights.
@@ -16,11 +23,16 @@ from modal_trellis2.modal.weights import BIREFNET_REPO, DINOV3_REPO, DINOV3_URL,
 
 def _hf_env() -> None:
     os.environ["HF_HOME"] = MODEL_DIR
-    os.environ["HF_HUB_CACHE"] = f"{MODEL_DIR}/cache"
 
 
-def _cache_repo_dir(repo_id: str) -> str:
-    return f"{MODEL_DIR}/cache/models--{repo_id.replace('/', '--')}"
+def _extra_dir(name: str) -> str:
+    return f"{MODEL_DIR}/{name}"
+
+
+def _extra_ready(name: str) -> bool:
+    from pathlib import Path
+
+    return (Path(MODEL_DIR) / name / "config.json").is_file()
 
 
 @app.function(
@@ -51,10 +63,11 @@ def prefetch_weights() -> dict[str, Any]:
     )
 
     extras: dict[str, Any] = {}
-    for repo in (DINOV3_REPO, BIREFNET_REPO):
+    for repo, folder in ((DINOV3_REPO, DINOV3_LOCAL), (BIREFNET_REPO, BIREFNET_LOCAL)):
+        dest_extra = _extra_dir(folder)
         try:
-            snapshot_download(repo_id=repo, token=token)
-            extras[repo] = {"ok": True, "path": _cache_repo_dir(repo)}
+            snapshot_download(repo_id=repo, local_dir=dest_extra, token=token)
+            extras[repo] = {"ok": _extra_ready(folder), "path": dest_extra}
         except GatedRepoError:
             extras[repo] = {
                 "ok": False,
@@ -90,15 +103,15 @@ def prefetch_status() -> dict[str, Any]:
 
     dest = Path(MODEL_DIR) / "trellis2"
     pipeline = dest / "pipeline.json"
-    dinov3 = Path(_cache_repo_dir(DINOV3_REPO))
-    birefnet = Path(_cache_repo_dir(BIREFNET_REPO))
     return {
-        "ok": pipeline.is_file() and dinov3.exists(),
+        "ok": pipeline.is_file() and _extra_ready(DINOV3_LOCAL),
         "path": str(dest),
         "has_pipeline_json": pipeline.is_file(),
         "bytes": _dir_bytes(dest) if dest.exists() else 0,
-        "dinov3": dinov3.exists(),
-        "birefnet": birefnet.exists(),
+        "dinov3": _extra_ready(DINOV3_LOCAL),
+        "birefnet": _extra_ready(BIREFNET_LOCAL),
+        "dinov3_path": _extra_dir(DINOV3_LOCAL),
+        "birefnet_path": _extra_dir(BIREFNET_LOCAL),
         "dinov3_url": DINOV3_URL,
         "gpu_downloads": False,
     }

@@ -13,6 +13,7 @@ from modal_trellis2.modal.preprocess import CpuPreprocessor  # noqa: F401
 from modal_trellis2.modal.prefetch import prefetch_status, prefetch_weights  # noqa: F401
 from modal_trellis2.modal.volumes import MODEL_DIR, model_volume
 from modal_trellis2.modal.weights import (
+    DINOV3_LOCAL,
     GPU_SCALEDOWN_SECONDS,
     MODELS_1024,
     MODELS_512,
@@ -27,8 +28,22 @@ def _offline_env() -> None:
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
     os.environ["HF_HOME"] = MODEL_DIR
-    os.environ["HF_HUB_CACHE"] = f"{MODEL_DIR}/cache"
     os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
+
+
+def _use_local_dinov3() -> None:
+    """Point the official image encoder at the CPU-prefetched folder."""
+    from trellis2.modules.image_feature_extractor import DinoV3FeatureExtractor
+
+    local = f"{MODEL_DIR}/{DINOV3_LOCAL}"
+    original = DinoV3FeatureExtractor.__init__
+
+    def patched(self, model_name: str, image_size: int = 512):  # type: ignore[no-untyped-def]
+        if os.path.isfile(os.path.join(local, "config.json")):
+            model_name = local
+        original(self, model_name, image_size)
+
+    DinoV3FeatureExtractor.__init__ = patched  # type: ignore[method-assign]
 
 
 def _require_local_weights() -> str:
@@ -53,7 +68,6 @@ def _require_local_weights() -> str:
         "HF_HUB_OFFLINE": "1",
         "TRANSFORMERS_OFFLINE": "1",
         "HF_HOME": MODEL_DIR,
-        "HF_HUB_CACHE": f"{MODEL_DIR}/cache",
         "HF_HUB_DISABLE_TELEMETRY": "1",
     },
 )
@@ -70,6 +84,7 @@ class Trellis2Worker:
             sys.path.insert(0, "/root/TRELLIS.2")
         _offline_env()
         weights = _require_local_weights()
+        _use_local_dinov3()
 
         from trellis2.pipelines import Trellis2ImageTo3DPipeline
 

@@ -31,12 +31,21 @@ def test_preprocess_module_does_not_import_worker() -> None:
 
 
 def test_weight_repo_constants() -> None:
-    from modal_trellis2.modal.weights import BIREFNET_REPO, DINOV3_REPO, DINOV3_URL, TRELLIS2_REPO
+    from modal_trellis2.modal.weights import (
+        BIREFNET_LOCAL,
+        BIREFNET_REPO,
+        DINOV3_LOCAL,
+        DINOV3_REPO,
+        DINOV3_URL,
+        TRELLIS2_REPO,
+    )
 
     assert TRELLIS2_REPO == "microsoft/TRELLIS.2-4B"
     assert DINOV3_REPO.startswith("facebook/dinov3")
     assert DINOV3_URL.startswith("https://huggingface.co/")
     assert BIREFNET_REPO.startswith("ZhengPeng7/")
+    assert DINOV3_LOCAL == "dinov3"
+    assert BIREFNET_LOCAL == "birefnet"
 
 
 def test_cli_prefetch_and_deploy_help() -> None:
