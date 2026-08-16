@@ -82,7 +82,7 @@ function tick() {
 function setMode() {
   const live = !dryRun.checked;
   statusDot.dataset.mode = live ? "live" : "dry";
-  statusLabel.textContent = live ? "live GPU" : "dry-run";
+  statusLabel.textContent = live ? "official TRELLIS.2-4B" : "dry-run";
 }
 
 function showPreview(file) {
@@ -143,7 +143,7 @@ form.addEventListener("submit", async (event) => {
   body.set("pipeline", document.querySelector("#pipeline").value);
   body.set("dry_run", dryRun.checked ? "true" : "false");
   go.disabled = true;
-  hint.textContent = dryRun.checked ? "本地立方体上转台……" : "正在叫 Modal GPU……";
+  hint.textContent = dryRun.checked ? "本地立方体上转台……" : "正在跑官方 TRELLIS.2-4B……";
   try {
     const response = await fetch("/api/generate", { method: "POST", body });
     const payload = await response.json();
@@ -153,8 +153,8 @@ form.addEventListener("submit", async (event) => {
     download.hidden = false;
     stageLabel.textContent = `${payload.id} · ${payload.glb_size_bytes} B`;
     hint.textContent = payload.dry_run
-      ? "这是 tinted cube，用来先把上传/回传/可视化跑通。"
-      : "TRELLIS.2 网格已回到转台上。";
+      ? "这是 tinted cube，不是官方网格。"
+      : "官方 TRELLIS.2-4B 网格已回到转台上。";
   } catch (error) {
     hint.textContent = error.message;
   } finally {

@@ -56,7 +56,7 @@ class Settings(BaseSettings):
     default_gpu: str = "A100-80GB"
     default_pipeline: PipelineType = "512"
     default_seed: int = 42
-    dry_run: bool = True
+    dry_run: bool = False
     hf_token: str | None = None
 
     @property

@@ -36,9 +36,9 @@ def generate(
     out: Path | None = typer.Option(None, "--out", "-o", help="Write GLB here"),
     seed: int = typer.Option(42, "--seed"),
     pipeline: str = typer.Option("512", "--pipeline"),
-    dry_run: bool = typer.Option(True, "--dry-run/--live", help="Mock cube vs Modal GPU"),
+    dry_run: bool = typer.Option(False, "--dry-run/--live", help="Mock cube vs official TRELLIS.2-4B"),
 ) -> None:
-    """Image in, GLB file out."""
+    """Image in, official TRELLIS.2 GLB out. Pass --dry-run for a local cube."""
     settings = load_settings()
     service = build_service(settings, dry_run=dry_run)
     job = service.generate(image.read_bytes(), filename=image.name, seed=seed, pipeline=pipeline, dry_run=dry_run)
@@ -49,7 +49,7 @@ def generate(
     if out:
         out.write_bytes(glb_path.read_bytes())
         glb_path = out
-    kind = "dry-run cube" if job.dry_run else "TRELLIS.2"
+    kind = "dry-run cube" if job.dry_run else "official TRELLIS.2-4B"
     console.print(f"[green]{kind}[/green] {job.id} → {glb_path} ({job.glb_size_bytes} bytes, {job.latency_ms:.0f} ms)")
 
 
@@ -81,6 +81,27 @@ def doctor() -> None:
     console.print(table)
     if not report.ready:
         raise typer.Exit(1)
+
+
+@app.command()
+def health() -> None:
+    """Ping the deployed official Trellis2Worker. Starts a GPU if the app is up."""
+    import modal
+
+    from modal_trellis2.modal.app import APP_NAME
+    from modal_trellis2.modal.weights import TRELLIS2_REPO
+
+    try:
+        worker = modal.Cls.from_name(APP_NAME, "Trellis2Worker")()
+        payload = worker.health.remote()
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]official worker not reachable[/red] {exc}")
+        console.print("Run `modal-trellis2 deploy` after `modal-trellis2 prefetch`.")
+        raise typer.Exit(1) from exc
+    console.print(payload)
+    if not payload.get("ok"):
+        raise typer.Exit(1)
+    console.print(f"[green]official[/green] {TRELLIS2_REPO} source={payload.get('source')}")
 
 
 @app.command()

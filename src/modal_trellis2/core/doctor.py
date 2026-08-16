@@ -32,9 +32,13 @@ def run_doctor(settings: Settings | None = None) -> DoctorReport:
         _optional_dir("vendor/fast-trellis2", Path("vendor/fast-trellis2")),
         _optional_dir("vendor/meshii", Path("vendor/meshii")),
         Check(
-            name="dry-run default",
+            name="generator",
             ok=True,
-            detail="on" if settings.dry_run else "off — this will call Modal if a worker is deployed",
+            detail=(
+                "dry-run mock cube"
+                if settings.dry_run
+                else "official microsoft/TRELLIS.2-4B via Modal"
+            ),
         ),
         _env_present("HF_TOKEN"),
         _command("gh", "gh"),

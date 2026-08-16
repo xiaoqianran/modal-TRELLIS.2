@@ -34,8 +34,9 @@ class ModalTrellis2Generator:
             return GenerateResult(
                 job_id=request.job_id,
                 error=(
-                    f"Modal TRELLIS.2 call failed: {exc}. "
-                    "Stay on --dry-run until `modal deploy -m modal_trellis2.modal.worker` succeeds."
+                    f"Official TRELLIS.2-4B call failed: {exc}. "
+                    "Run `modal-trellis2 prefetch` then `modal-trellis2 deploy`. "
+                    "Use --dry-run only to test the upload/download loop."
                 ),
                 latency_ms=(time.perf_counter() - started) * 1000,
             )
@@ -45,7 +46,8 @@ class ModalTrellis2Generator:
             latency_ms=payload.get("latency_ms", (time.perf_counter() - started) * 1000),
             dry_run=False,
             telemetry={
-                "backend": "modal",
+                "backend": "official-trellis2",
+                "model": payload.get("source") or "microsoft/TRELLIS.2-4B",
                 "pipeline": payload.get("pipeline", request.pipeline),
                 "seed": payload.get("seed", request.seed),
                 "size_bytes": payload.get("size_bytes"),

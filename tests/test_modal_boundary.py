@@ -37,3 +37,13 @@ def test_cli_prefetch_and_deploy_help() -> None:
     assert deploy.exit_code == 0, deploy.output
     smoke = runner.invoke(app, ["gpu-smoke", "--help"])
     assert smoke.exit_code == 0, smoke.output
+    health = runner.invoke(app, ["health", "--help"])
+    assert health.exit_code == 0, health.output
+
+
+def test_official_model_is_the_default() -> None:
+    from modal_trellis2.core.config import Settings
+    from modal_trellis2.modal.weights import TRELLIS2_REPO
+
+    assert TRELLIS2_REPO == "microsoft/TRELLIS.2-4B"
+    assert Settings.model_fields["dry_run"].default is False
