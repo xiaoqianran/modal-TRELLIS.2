@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>modal-TRELLIS.2 · 扫描台</title>
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Source+Sans+3:wght@400;600&family=Syne:wght@600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <div class="grain" aria-hidden="true"></div>
+    <header class="top">
+      <div class="brand">
+        <span class="mark" aria-hidden="true"></span>
+        <div>
+          <p class="eyebrow">modal-TRELLIS.2</p>
+          <h1>扫描台</h1>
+        </div>
+      </div>
+      <p class="contract">图片进去 · GLB 出来</p>
+      <div class="status" id="status">
+        <span class="dot" data-mode="dry"></span>
+        <span id="status-label">dry-run</span>
+      </div>
+    </header>
+
+    <main class="workshop">
+      <section class="bench" aria-label="上传">
+        <form id="form">
+          <label class="drop" id="drop" for="file">
+            <input id="file" name="image" type="file" accept="image/png,image/jpeg,image/webp" required />
+            <div class="polaroid" id="preview-wrap" hidden>
+              <img id="preview" alt="上传预览" />
+            </div>
+            <div class="drop-copy" id="drop-copy">
+              <strong>把参考图放到台面上</strong>
+              <span>PNG / JPEG / WebP，一张就够</span>
+            </div>
+          </label>
+
+          <div class="dials">
+            <label>
+              管线
+              <select id="pipeline" name="pipeline">
+                <option value="512" selected>512³ · 先跑通</option>
+                <option value="1024">1024³</option>
+                <option value="1024_cascade">1024 cascade</option>
+                <option value="1536_cascade">1536 cascade</option>
+              </select>
+            </label>
+            <label>
+              seed
+              <input id="seed" name="seed" type="number" min="0" value="42" />
+            </label>
+          </div>
+
+          <label class="switch">
+            <input id="dry-run" type="checkbox" checked />
+            <span>dry-run：本地立方体，不烧 GPU</span>
+          </label>
+
+          <button type="submit" id="go">生成并放到转台上</button>
+          <p class="hint" id="hint">第一版只保证一件事：对面把文件还回来。</p>
+        </form>
+      </section>
+
+      <section class="stage" aria-label="三维预览">
+        <div id="canvas-host"></div>
+        <div class="stage-chrome">
+          <p id="stage-label">空转台</p>
+          <div class="actions">
+            <a id="download" class="ghost" hidden href="#">下载 GLB</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script type="module" src="/static/app.js"></script>
+  </body>
+</html>
