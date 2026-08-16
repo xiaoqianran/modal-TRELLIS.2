@@ -145,7 +145,7 @@ def deploy() -> None:
     import subprocess
     import sys
 
-    cmd = [sys.executable, "-m", "modal", "deploy", "-m", "modal_trellis2.modal.worker"]
+    cmd = [sys.executable, "-m", "modal", "deploy", "-m", "modal_trellis2.modal.deploy"]
     console.print(" ".join(cmd))
     raise typer.Exit(subprocess.call(cmd))
 

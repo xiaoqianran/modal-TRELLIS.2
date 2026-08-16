@@ -20,7 +20,7 @@ cp .env.example .env
 
 modal-trellis2 doctor
 modal-trellis2 prefetch          # CPU 下载官方 4B + DINOv3 + BiRefNet → Volume
-modal-trellis2 deploy            # 注册 CPU 抠图 + GPU worker
+modal-trellis2 deploy            # 注册 CPU 抠图 + GPU worker（modal_trellis2.modal.deploy）
 modal-trellis2 health            # 只查 Volume，不点 GPU
 modal-trellis2 generate path/to/photo.png -o /tmp/mesh.glb
 modal-trellis2 web

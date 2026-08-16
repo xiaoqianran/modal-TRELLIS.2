@@ -9,8 +9,6 @@ import modal
 
 from modal_trellis2.modal.app import app
 from modal_trellis2.modal.image import trellis2_image
-from modal_trellis2.modal.preprocess import CpuPreprocessor  # noqa: F401
-from modal_trellis2.modal.prefetch import prefetch_status, prefetch_weights  # noqa: F401
 from modal_trellis2.modal.volumes import MODEL_DIR, model_volume
 from modal_trellis2.modal.weights import (
     DINOV3_LOCAL,

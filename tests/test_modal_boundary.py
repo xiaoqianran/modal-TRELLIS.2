@@ -81,3 +81,5 @@ def test_gpu_worker_releases_in_ten_seconds() -> None:
     assert "enable_memory_snapshot=True" in source
     assert "huggingface_secret" not in source
     assert "HF_HUB_OFFLINE" in source
+    assert "CpuPreprocessor" not in source
+    assert "from modal_trellis2.modal.preprocess" not in source

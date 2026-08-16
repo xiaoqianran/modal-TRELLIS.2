@@ -37,7 +37,7 @@ Local CLI/Web own jobs and the GLB workbench. Modal owns GPU inference.
 - GPU `Trellis2Worker` uses a CPU memory snapshot (`@modal.enter(snap=True)`), then only `.cuda()` + `run` + official `to_glb`. `scaledown_window=10`.
 - Live GPU needs gated `facebook/dinov3-vitl16-pretrain-lvd1689m` accepted on the HF account behind `HF_TOKEN` **before prefetch**. After that the GPU never talks to Hugging Face.
 - Do **not** `modal run -m modal_trellis2.modal.worker` just to prefetch — that file registers `Trellis2Worker` and builds CUDA
-- Deploy: `modal-trellis2 deploy` or `modal deploy -m modal_trellis2.modal.worker`
+- Deploy: `modal-trellis2 deploy` or `modal deploy -m modal_trellis2.modal.deploy`
 - Probe: `modal-trellis2 health` (CPU Volume). `health --gpu` starts an A100.
 - Smoke: `modal run -m modal_trellis2.modal.smoke` (secret) / `modal run -m modal_trellis2.modal.gpu_smoke` (CUDA image + A100)
 - Local web/CLI are **not** `modal serve`
