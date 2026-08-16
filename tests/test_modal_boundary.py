@@ -20,6 +20,16 @@ def test_prefetch_module_does_not_import_worker() -> None:
     assert hasattr(modal_trellis2.modal.prefetch, "prefetch_status")
 
 
+def test_preprocess_module_does_not_import_worker() -> None:
+    for name in list(sys.modules):
+        if name.startswith("modal_trellis2.modal.worker"):
+            del sys.modules[name]
+    import modal_trellis2.modal.preprocess  # noqa: F401
+
+    assert "modal_trellis2.modal.worker" not in sys.modules
+    assert hasattr(modal_trellis2.modal.preprocess, "CpuPreprocessor")
+
+
 def test_weight_repo_constants() -> None:
     from modal_trellis2.modal.weights import BIREFNET_REPO, DINOV3_REPO, DINOV3_URL, TRELLIS2_REPO
 
@@ -43,7 +53,22 @@ def test_cli_prefetch_and_deploy_help() -> None:
 
 def test_official_model_is_the_default() -> None:
     from modal_trellis2.core.config import Settings
-    from modal_trellis2.modal.weights import TRELLIS2_REPO
+    from modal_trellis2.modal.weights import GPU_SCALEDOWN_SECONDS, TRELLIS2_REPO
 
     assert TRELLIS2_REPO == "microsoft/TRELLIS.2-4B"
     assert Settings.model_fields["dry_run"].default is False
+    assert GPU_SCALEDOWN_SECONDS == 10
+
+
+def test_gpu_worker_releases_in_ten_seconds() -> None:
+    import inspect
+
+    from modal_trellis2.modal import worker
+    from modal_trellis2.modal.weights import GPU_SCALEDOWN_SECONDS
+
+    source = inspect.getsource(worker)
+    assert GPU_SCALEDOWN_SECONDS == 10
+    assert "scaledown_window=GPU_SCALEDOWN_SECONDS" in source
+    assert "enable_memory_snapshot=True" in source
+    assert "huggingface_secret" not in source
+    assert "HF_HUB_OFFLINE" in source

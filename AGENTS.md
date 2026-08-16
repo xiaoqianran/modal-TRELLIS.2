@@ -32,12 +32,13 @@ Local CLI/Web own jobs and the GLB workbench. Modal owns GPU inference.
 - Contract: image bytes → `ImageTo3DGenerator` → GLB bytes
 - Default path is official `microsoft/TRELLIS.2-4B` via `ModalTrellis2Generator`
 - `--dry-run` / `MockGenerator` is opt-in for the upload/download loop
-- Weights: `modal-trellis2 prefetch` (CPU image only) writes `/models/trellis2` plus HF cache copies of DINOv3 / BiRefNet, then `commit()`s
-- Live GPU needs gated `facebook/dinov3-vitl16-pretrain-lvd1689m` accepted on the HF account behind `HF_TOKEN`
+- Weights: `modal-trellis2 prefetch` (CPU image only) writes `/models/trellis2` plus HF cache copies of DINOv3 / BiRefNet, then `commit()`s. GPU is `HF_HUB_OFFLINE=1` and has no HF secret.
+- RGB uploads: `CpuPreprocessor` runs BiRefNet on CPU. Images that already have alpha are cropped locally.
+- GPU `Trellis2Worker` uses a CPU memory snapshot (`@modal.enter(snap=True)`), then only `.cuda()` + `run` + official `to_glb`. `scaledown_window=10`.
+- Live GPU needs gated `facebook/dinov3-vitl16-pretrain-lvd1689m` accepted on the HF account behind `HF_TOKEN` **before prefetch**. After that the GPU never talks to Hugging Face.
 - Do **not** `modal run -m modal_trellis2.modal.worker` just to prefetch — that file registers `Trellis2Worker` and builds CUDA
-- GPU `Trellis2Worker` loads that snapshot when `pipeline.json` exists
 - Deploy: `modal-trellis2 deploy` or `modal deploy -m modal_trellis2.modal.worker`
-- Probe: `modal-trellis2 health`
+- Probe: `modal-trellis2 health` (CPU Volume). `health --gpu` starts an A100.
 - Smoke: `modal run -m modal_trellis2.modal.smoke` (secret) / `modal run -m modal_trellis2.modal.gpu_smoke` (CUDA image + A100)
 - Local web/CLI are **not** `modal serve`
 

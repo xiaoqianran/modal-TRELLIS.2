@@ -1,66 +1,94 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 from typing import Any
 
 import modal
 
-from modal_trellis2.modal.app import app, huggingface_secret
+from modal_trellis2.modal.app import app
 from modal_trellis2.modal.image import trellis2_image
-from modal_trellis2.modal.volumes import MODEL_DIR, RESULTS_DIR, model_volume, results_volume
+from modal_trellis2.modal.preprocess import CpuPreprocessor  # noqa: F401
+from modal_trellis2.modal.prefetch import prefetch_status, prefetch_weights  # noqa: F401
+from modal_trellis2.modal.volumes import MODEL_DIR, model_volume
+from modal_trellis2.modal.weights import (
+    GPU_SCALEDOWN_SECONDS,
+    MODELS_1024,
+    MODELS_512,
+    TRELLIS2_REPO,
+)
+
+# GPU is offline. Weights come from the CPU Volume. Do not import this
+# module from prefetch.py — `modal run -m prefetch` must stay CPU-only.
+
+
+def _offline_env() -> None:
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    os.environ["HF_HOME"] = MODEL_DIR
+    os.environ["HF_HUB_CACHE"] = f"{MODEL_DIR}/cache"
+    os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
+
+
+def _require_local_weights() -> str:
+    weights = f"{MODEL_DIR}/trellis2"
+    if not os.path.exists(f"{weights}/pipeline.json"):
+        raise RuntimeError(
+            "Official TRELLIS.2-4B is not on the Volume. "
+            "Run `modal-trellis2 prefetch` on CPU first. GPU will not download."
+        )
+    return weights
 
 
 @app.cls(
     gpu="A100-80GB",
     image=trellis2_image,
-    volumes={MODEL_DIR: model_volume, RESULTS_DIR: results_volume},
-    secrets=[huggingface_secret()],
+    volumes={MODEL_DIR: model_volume},
     timeout=30 * 60,
-    scaledown_window=300,
+    scaledown_window=GPU_SCALEDOWN_SECONDS,
     retries=0,
+    enable_memory_snapshot=True,
+    env={
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "HF_HOME": MODEL_DIR,
+        "HF_HUB_CACHE": f"{MODEL_DIR}/cache",
+        "HF_HUB_DISABLE_TELEMETRY": "1",
+    },
 )
 class Trellis2Worker:
-    """Official TRELLIS.2 image-to-3D. Keep this file the only place that imports trellis2."""
+    """Official TRELLIS.2. CPU snapshot loads weights; GPU only does .cuda() + run."""
 
-    @modal.enter()
-    def setup(self) -> None:
+    @modal.enter(snap=True)
+    def load_cpu(self) -> None:
+        """Read the Volume into CPU RAM. Modal snapshots this. No GPU here."""
         import sys
-
-        from huggingface_hub import login
 
         model_volume.reload()
         if "/root/TRELLIS.2" not in sys.path:
             sys.path.insert(0, "/root/TRELLIS.2")
-        os.environ["HF_HOME"] = MODEL_DIR
-        os.environ["HF_HUB_CACHE"] = f"{MODEL_DIR}/cache"
-        token = os.environ.get("HF_TOKEN")
-        if token:
-            login(token=token, add_to_git_credential=False)
+        _offline_env()
+        weights = _require_local_weights()
 
-        from huggingface_hub.errors import GatedRepoError
         from trellis2.pipelines import Trellis2ImageTo3DPipeline
+
+        Trellis2ImageTo3DPipeline.model_names_to_load = list(MODELS_512)
+        self.pipeline = Trellis2ImageTo3DPipeline.from_pretrained(weights)
+        self.pipeline.rembg_model = None
+        self.weights_source = weights
+
+    @modal.enter(snap=False)
+    def move_to_gpu(self) -> None:
+        """The only GPU-side setup: attach CUDA and move the already-loaded pipeline."""
         import o_voxel
 
-        from modal_trellis2.modal.weights import DINOV3_URL, TRELLIS2_REPO
-
-        weights = f"{MODEL_DIR}/trellis2"
-        source = weights if os.path.exists(f"{weights}/pipeline.json") else TRELLIS2_REPO
-        self.weights_source = source
-        try:
-            self.pipeline = Trellis2ImageTo3DPipeline.from_pretrained(source)
-        except GatedRepoError as exc:
-            raise RuntimeError(
-                "TRELLIS.2 needs the gated DINOv3 image encoder. "
-                f"Accept the license at {DINOV3_URL} with the same HF account as HF_TOKEN, "
-                "then run `modal-trellis2 prefetch` again."
-            ) from exc
-        self.pipeline.cuda()
         self.o_voxel = o_voxel
+        self.pipeline.cuda()
 
     @modal.method()
     def health(self) -> dict[str, Any]:
-        """Confirm the GPU container loaded the official pipeline. Starts a GPU."""
+        """Confirm the GPU container restored the snapshot and moved weights. Starts a GPU."""
         import torch
 
         weights = f"{MODEL_DIR}/trellis2"
@@ -70,6 +98,9 @@ class Trellis2Worker:
             "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
             "weights_local": os.path.exists(f"{weights}/pipeline.json"),
             "source": getattr(self, "weights_source", weights),
+            "offline": os.environ.get("HF_HUB_OFFLINE") == "1",
+            "scaledown_window": GPU_SCALEDOWN_SECONDS,
+            "repo": TRELLIS2_REPO,
         }
 
     @modal.method()
@@ -85,9 +116,18 @@ class Trellis2Worker:
         from PIL import Image
 
         started = time.perf_counter()
-        image = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
-        mesh = self.pipeline.run(image, seed=seed, pipeline_type=pipeline_type)[0]
+        self._ensure_models(pipeline_type)
+        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        infer_started = time.perf_counter()
+        mesh = self.pipeline.run(
+            image,
+            seed=seed,
+            pipeline_type=pipeline_type,
+            preprocess_image=False,
+        )[0]
+        infer_ms = (time.perf_counter() - infer_started) * 1000
         mesh.simplify(16_777_216)
+        export_started = time.perf_counter()
         glb = self.o_voxel.postprocess.to_glb(
             vertices=mesh.vertices,
             faces=mesh.faces,
@@ -106,10 +146,7 @@ class Trellis2Worker:
         buffer = io.BytesIO()
         glb.export(buffer, file_type="glb")
         payload = buffer.getvalue()
-        job_path = f"{RESULTS_DIR}/last.glb"
-        with open(job_path, "wb") as handle:
-            handle.write(payload)
-        results_volume.commit()
+        export_ms = (time.perf_counter() - export_started) * 1000
         return {
             "glb_bytes": payload,
             "latency_ms": (time.perf_counter() - started) * 1000,
@@ -117,4 +154,24 @@ class Trellis2Worker:
             "seed": seed,
             "size_bytes": len(payload),
             "source": getattr(self, "weights_source", f"{MODEL_DIR}/trellis2"),
+            "offline": True,
+            "scaledown_window": GPU_SCALEDOWN_SECONDS,
+            "timings": {
+                "infer_ms": infer_ms,
+                "export_ms": export_ms,
+            },
         }
+
+    def _ensure_models(self, pipeline_type: str) -> None:
+        needed = MODELS_512 if pipeline_type == "512" else MODELS_1024
+        missing = [name for name in needed if name not in self.pipeline.models]
+        if not missing:
+            return
+        from trellis2 import models
+
+        weights = getattr(self, "weights_source", _require_local_weights())
+        with open(f"{weights}/pipeline.json", encoding="utf-8") as handle:
+            spec = json.load(handle)["args"]["models"]
+        for name in missing:
+            self.pipeline.models[name] = models.from_pretrained(f"{weights}/{spec[name]}")
+            self.pipeline.models[name].eval()

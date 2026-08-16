@@ -42,6 +42,7 @@ def prefetch_weights() -> dict[str, Any]:
         login(token=token, add_to_git_credential=False)
 
     dest = f"{MODEL_DIR}/trellis2"
+    # This is the only Hugging Face download path. The GPU worker is offline.
     snapshot_download(
         repo_id=TRELLIS2_REPO,
         local_dir=dest,
@@ -74,6 +75,7 @@ def prefetch_weights() -> dict[str, Any]:
         "dinov3": extras.get(DINOV3_REPO),
         "birefnet": extras.get(BIREFNET_REPO),
         "dinov3_url": DINOV3_URL,
+        "gpu_downloads": False,
     }
 
 
@@ -98,6 +100,7 @@ def prefetch_status() -> dict[str, Any]:
         "dinov3": dinov3.exists(),
         "birefnet": birefnet.exists(),
         "dinov3_url": DINOV3_URL,
+        "gpu_downloads": False,
     }
 
 

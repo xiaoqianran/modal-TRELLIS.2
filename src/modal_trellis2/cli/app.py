@@ -51,6 +51,9 @@ def generate(
         glb_path = out
     kind = "dry-run cube" if job.dry_run else "official TRELLIS.2-4B"
     console.print(f"[green]{kind}[/green] {job.id} → {glb_path} ({job.glb_size_bytes} bytes, {job.latency_ms:.0f} ms)")
+    timings = (job.telemetry or {}).get("timings")
+    if timings:
+        console.print(timings)
 
 
 @app.command()
@@ -84,12 +87,26 @@ def doctor() -> None:
 
 
 @app.command()
-def health() -> None:
-    """Ping the deployed official Trellis2Worker. Starts a GPU if the app is up."""
+def health(
+    gpu: bool = typer.Option(False, "--gpu", help="Start an A100 to ping Trellis2Worker"),
+) -> None:
+    """CPU Volume check by default. Pass --gpu only when you want to start an A100."""
     import modal
 
-    from modal_trellis2.modal.app import APP_NAME
+    from modal_trellis2.modal.app import APP_NAME, app as modal_app
+    from modal_trellis2.modal.prefetch import prefetch_status
     from modal_trellis2.modal.weights import TRELLIS2_REPO
+
+    if not gpu:
+        with modal.enable_output():
+            with modal_app.run():
+                payload = prefetch_status.remote()
+        console.print(payload)
+        if not payload.get("ok"):
+            console.print("Volume is missing official weights. Run `modal-trellis2 prefetch`.")
+            raise typer.Exit(1)
+        console.print(f"[green]cpu[/green] {TRELLIS2_REPO} on Volume, GPU not started")
+        return
 
     try:
         worker = modal.Cls.from_name(APP_NAME, "Trellis2Worker")()
@@ -101,7 +118,7 @@ def health() -> None:
     console.print(payload)
     if not payload.get("ok"):
         raise typer.Exit(1)
-    console.print(f"[green]official[/green] {TRELLIS2_REPO} source={payload.get('source')}")
+    console.print(f"[green]official gpu[/green] {TRELLIS2_REPO} source={payload.get('source')}")
 
 
 @app.command()

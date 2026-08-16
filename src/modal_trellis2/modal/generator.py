@@ -3,10 +3,11 @@ from __future__ import annotations
 import time
 
 from modal_trellis2.core.generator import GenerateRequest, GenerateResult
+from modal_trellis2.core.preprocess import prepare_image
 
 
 class ModalTrellis2Generator:
-    """Calls the deployed Trellis2Worker. Core stays free of Modal imports at rest."""
+    """CPU rembg first, then the deployed GPU worker. Core stays free of Modal at rest."""
 
     def generate(self, request: GenerateRequest) -> GenerateResult:
         started = time.perf_counter()
@@ -20,11 +21,38 @@ class ModalTrellis2Generator:
                 error=f"Modal client import failed: {exc}",
                 latency_ms=(time.perf_counter() - started) * 1000,
             )
+
+        try:
+            image_bytes, needs_rembg = prepare_image(request.image_bytes)
+        except Exception as exc:  # noqa: BLE001
+            return GenerateResult(
+                job_id=request.job_id,
+                error=f"CPU image prepare failed: {exc}",
+                latency_ms=(time.perf_counter() - started) * 1000,
+            )
+
+        rembg_ms = 0.0
+        if needs_rembg:
+            rembg_started = time.perf_counter()
+            try:
+                cpu = modal.Cls.from_name(APP_NAME, "CpuPreprocessor")()
+                image_bytes = cpu.run.remote(image_bytes)
+            except Exception as exc:  # noqa: BLE001
+                return GenerateResult(
+                    job_id=request.job_id,
+                    error=(
+                        f"CPU rembg failed: {exc}. "
+                        "Run `modal-trellis2 prefetch` then `modal-trellis2 deploy`."
+                    ),
+                    latency_ms=(time.perf_counter() - started) * 1000,
+                )
+            rembg_ms = (time.perf_counter() - rembg_started) * 1000
+
         try:
             cls = modal.Cls.from_name(APP_NAME, "Trellis2Worker")
             worker = cls.with_options(gpu=request.gpu)()
             payload = worker.generate.remote(
-                request.image_bytes,
+                image_bytes,
                 seed=request.seed,
                 pipeline_type=request.pipeline,
                 texture_size=request.texture_size,
@@ -40,6 +68,9 @@ class ModalTrellis2Generator:
                 ),
                 latency_ms=(time.perf_counter() - started) * 1000,
             )
+        timings = dict(payload.get("timings") or {})
+        timings["rembg_ms"] = rembg_ms
+        timings["rembg"] = "cpu" if needs_rembg else "skipped-alpha"
         return GenerateResult(
             job_id=request.job_id,
             glb_bytes=payload["glb_bytes"],
@@ -52,5 +83,8 @@ class ModalTrellis2Generator:
                 "seed": payload.get("seed", request.seed),
                 "size_bytes": payload.get("size_bytes"),
                 "gpu": request.gpu,
+                "offline": payload.get("offline", True),
+                "scaledown_window": payload.get("scaledown_window"),
+                "timings": timings,
             },
         )

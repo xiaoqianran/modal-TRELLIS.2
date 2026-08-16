@@ -19,13 +19,15 @@ pip install -e ".[dev]"
 cp .env.example .env
 
 modal-trellis2 doctor
-modal-trellis2 prefetch          # 官方 4B + DINOv3 + BiRefNet → Volume
-modal-trellis2 deploy            # CUDA worker
+modal-trellis2 prefetch          # CPU 下载官方 4B + DINOv3 + BiRefNet → Volume
+modal-trellis2 deploy            # 注册 CPU 抠图 + GPU worker
+modal-trellis2 health            # 只查 Volume，不点 GPU
 modal-trellis2 generate path/to/photo.png -o /tmp/mesh.glb
 modal-trellis2 web
 ```
 
 打开 http://127.0.0.1:7863 。默认 **官方 TRELLIS.2-4B**，`pipeline=512`。  
+权重只在 CPU prefetch 下载。GPU 离线加载 Volume，空闲 **10 秒**释放。  
 只有勾上 dry-run / 传 `--dry-run` 才会回立方体。
 
 ## 接口
@@ -61,7 +63,8 @@ modal secret create --force huggingface-secret \
 - [microsoft/TRELLIS.2-4B](https://huggingface.co/microsoft/TRELLIS.2-4B)（权重本身公开）
 - [facebook/dinov3-vitl16-pretrain-lvd1689m](https://huggingface.co/facebook/dinov3-vitl16-pretrain-lvd1689m)（官方图像编码器，gated）
 
-然后 `modal-trellis2 prefetch`。查 Volume：`modal-trellis2 prefetch --status`。探活：`modal-trellis2 health`。
+然后 `modal-trellis2 prefetch`（CPU）。查 Volume：`modal-trellis2 prefetch --status` 或 `modal-trellis2 health`。  
+`health --gpu` 才会启动 A100。
 
 ## 本地对照上游
 

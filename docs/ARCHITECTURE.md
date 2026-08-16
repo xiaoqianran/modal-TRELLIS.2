@@ -30,11 +30,14 @@ ImageTo3DGenerator
     ├── ModalTrellis2Generator  默认：官方 TRELLIS.2-4B
     └── MockGenerator           --dry-run / 测试
             ↓
-        prefetch.py  prefetch_weights (CPU image, Volume)
-            ↓
-        worker.py    Trellis2Worker.generate (GPU)
-            pipeline.run → o_voxel.to_glb → bytes
+        prefetch.py        CPU：HF 下载 4B + DINOv3 + BiRefNet → Volume
+        CpuPreprocessor    CPU：BiRefNet 抠图（上传已有 alpha 则本地做）
+        Trellis2Worker     GPU：内存快照恢复 → .cuda() → run → to_glb
+                           scaledown_window=10，HF offline，不下载
 ```
+
+GPU 只做两件事：把已经在 CPU 里的权重量到显存，以及官方推理 / `to_glb`（nvdiffrast 必须 CUDA）。  
+下载、Volume 写入、抠图、crop 都不准占 GPU。空闲 10 秒释放 A100。
 
 Core **不** import `trellis2` / `torch`。GPU 镜像、wheel、HuggingFace 权重只活在 `src/modal_trellis2/modal/`。
 
@@ -51,7 +54,8 @@ dry-run 只留给没有 Modal、没有 GPU、或只想测上传/下载的时候�
 1. **合同**  
    `POST /api/generate` 收图，`GET /api/assets/{id}.glb` 回文件。
 2. **官方 GPU（当前）**  
-   `modal-trellis2 prefetch` → `deploy` → `pipeline=512`。
+   `modal-trellis2 prefetch`（CPU）→ `deploy` → `pipeline=512`。  
+   `health` 默认只查 Volume，不点 GPU。要探活 A100 才加 `--gpu`。
 3. **fast-trellis2**  
    worker 里换 sampler。API 已留 `accelerator` 字段，先不要实现。
 4. **再谈 Meshii 的后处理**  
