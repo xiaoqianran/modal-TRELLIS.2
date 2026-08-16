@@ -140,6 +140,7 @@ class Trellis2Worker:
         pipeline_type: str = "512",
         texture_size: int = 1024,
         remesh: bool = True,
+        decimation_target: int | None = None,
     ) -> dict[str, Any]:
         import time
         from PIL import Image
@@ -157,6 +158,7 @@ class Trellis2Worker:
         infer_ms = (time.perf_counter() - infer_started) * 1000
         mesh.simplify(16_777_216)
         export_started = time.perf_counter()
+        target = decimation_target or (500_000 if pipeline_type == "512" else 1_000_000)
         glb = self.o_voxel.postprocess.to_glb(
             vertices=mesh.vertices,
             faces=mesh.faces,
@@ -165,7 +167,7 @@ class Trellis2Worker:
             attr_layout=mesh.layout,
             voxel_size=mesh.voxel_size,
             aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
-            decimation_target=500_000 if pipeline_type == "512" else 1_000_000,
+            decimation_target=target,
             texture_size=texture_size,
             remesh=remesh,
             remesh_band=1,
@@ -182,6 +184,9 @@ class Trellis2Worker:
             "pipeline": pipeline_type,
             "seed": seed,
             "size_bytes": len(payload),
+            "decimation_target": target,
+            "texture_size": texture_size,
+            "remesh": remesh,
             "source": getattr(self, "weights_source", f"{MODEL_DIR}/trellis2"),
             "offline": True,
             "scaledown_window": GPU_SCALEDOWN_SECONDS,
