@@ -32,8 +32,8 @@ class CpuPreprocessor:
 
     @modal.enter()
     def setup(self) -> None:
-        from transformers import AutoModelForImageSegmentation
         from torchvision import transforms
+        from transformers import AutoModelForImageSegmentation
 
         model_volume.reload()
         rmbg = f"{MODEL_DIR}/{RMBG_LOCAL}"

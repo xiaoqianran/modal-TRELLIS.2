@@ -83,7 +83,8 @@ def health(
     try:
         import modal
 
-        from modal_trellis2.modal.app import APP_NAME, app as modal_app
+        from modal_trellis2.modal.app import APP_NAME
+        from modal_trellis2.modal.app import app as modal_app
         from modal_trellis2.modal.prefetch import prefetch_status
     except Exception as exc:  # noqa: BLE001
         console.print(f"[red]Modal import failed:[/red] {exc}")

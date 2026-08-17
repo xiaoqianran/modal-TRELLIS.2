@@ -208,6 +208,7 @@ class Trellis2Worker:
         decimation_target: int | None = None,
     ) -> dict[str, Any]:
         import time
+
         from PIL import Image
 
         started = time.perf_counter()
