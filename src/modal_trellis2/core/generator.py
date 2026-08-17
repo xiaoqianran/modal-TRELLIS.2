@@ -1,35 +1,32 @@
 from __future__ import annotations
 
-from typing import Literal, Protocol
-
-from pydantic import BaseModel, Field
-
-from modal_trellis2.core.config import PipelineType
+from dataclasses import dataclass, field
+from typing import Protocol
 
 
-class GenerateRequest(BaseModel):
+@dataclass(slots=True)
+class GenerateRequest:
     job_id: str
     image_bytes: bytes
-    filename: str = "input.png"
+    pipeline: str = "512"
     seed: int = 42
-    pipeline: PipelineType = "512"
     texture_size: int = 1024
     remesh: bool = True
-    accelerator: Literal["off", "fast"] = "off"
-    gpu: str = "A100-80GB"
 
 
-class GenerateResult(BaseModel):
+@dataclass(slots=True)
+class GenerateResult:
     job_id: str
     glb_bytes: bytes | None = None
-    filename: str = "mesh.glb"
+    error: str | None = None
     latency_ms: float = 0.0
     dry_run: bool = False
-    error: str | None = None
-    telemetry: dict = Field(default_factory=dict)
+    telemetry: dict[str, object] = field(default_factory=dict)
+
+    @property
+    def ok(self) -> bool:
+        return self.error is None and self.glb_bytes is not None
 
 
 class ImageTo3DGenerator(Protocol):
-    """One image in, one GLB out. CLI and Web both call this."""
-
     def generate(self, request: GenerateRequest) -> GenerateResult: ...
