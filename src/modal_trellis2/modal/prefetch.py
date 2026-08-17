@@ -60,6 +60,7 @@ def prefetch_weights() -> dict[str, Any]:
         login(token=token, add_to_git_credential=False)
 
     api = HfApi()
+    previous_manifest = _read_manifest()
     revisions: dict[str, str | None] = {TRELLIS2_REPO: TRELLIS2_MODEL_REVISION}
 
     dest = f"{MODEL_DIR}/trellis2"
@@ -80,7 +81,9 @@ def prefetch_weights() -> dict[str, Any]:
     ):
         dest_extra = _extra_dir(folder)
         try:
-            revision = _repo_revision(api, repo, token)
+            revision = _manifest_revision(previous_manifest, repo) or _repo_revision(
+                api, repo, token
+            )
             revisions[repo] = revision
             snapshot_download(
                 repo_id=repo,
@@ -106,7 +109,9 @@ def prefetch_weights() -> dict[str, Any]:
                 "error": f"{type(exc).__name__}: {exc}",
             }
 
-    ss_revision = _repo_revision(api, SS_DEC_REPO, token)
+    ss_revision = _manifest_revision(previous_manifest, SS_DEC_REPO) or _repo_revision(
+        api, SS_DEC_REPO, token
+    )
     revisions[SS_DEC_REPO] = ss_revision
     extras[SS_DEC_REPO] = _pin_sparse_structure_decoder(dest, token, revision=ss_revision)
 
@@ -176,6 +181,16 @@ def prefetch_status() -> dict[str, Any]:
 @app.local_entrypoint()
 def main(status: bool = False) -> None:
     print(prefetch_status.remote() if status else prefetch_weights.remote())
+
+
+def _manifest_revision(manifest: dict[str, Any] | None, repo_id: str) -> str | None:
+    if not isinstance(manifest, dict):
+        return None
+    repos = manifest.get("repos")
+    if not isinstance(repos, dict):
+        return None
+    revision = repos.get(repo_id)
+    return revision if isinstance(revision, str) and revision else None
 
 
 def _repo_revision(api: Any, repo_id: str, token: str | None) -> str | None:

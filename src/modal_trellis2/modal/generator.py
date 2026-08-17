@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import time
-from pathlib import PurePosixPath
 
 from modal_trellis2.core.generator import GenerateRequest, GenerateResult
+from modal_trellis2.core.image import MAX_REMOTE_IMAGE_BYTES
 from modal_trellis2.core.preprocess import prepare_image
 from modal_trellis2.modal.volumes import OUTPUT_VOLUME_NAME
 from modal_trellis2.modal.weights import PRODUCTION_GPU
@@ -53,6 +53,7 @@ class ModalTrellis2Generator:
 
         try:
             image_bytes, needs_rembg = prepare_image(request.image_bytes)
+            self._require_inline_image(image_bytes, stage="prepared input")
         except Exception as exc:  # noqa: BLE001
             return GenerateResult(
                 job_id=request.job_id,
@@ -66,6 +67,7 @@ class ModalTrellis2Generator:
             try:
                 cpu = modal.Cls.from_name(APP_NAME, "CpuPreprocessor")()
                 image_bytes = cpu.run.remote(image_bytes)
+                self._require_inline_image(image_bytes, stage="CPU rembg output")
             except Exception as exc:  # noqa: BLE001
                 return GenerateResult(
                     job_id=request.job_id,
@@ -105,9 +107,12 @@ class ModalTrellis2Generator:
             output_path = payload.get("output_path")
             if not isinstance(output_path, str):
                 raise TypeError("worker response is missing output_path")
-            path = PurePosixPath(output_path)
-            if path.is_absolute() or ".." in path.parts or path.suffix != ".glb":
-                raise ValueError(f"worker returned unsafe output_path: {output_path!r}")
+            expected_output_path = f"jobs/{request.job_id}/mesh.glb"
+            if output_path != expected_output_path:
+                raise ValueError(
+                    "worker returned unexpected output_path: "
+                    f"{output_path!r} != {expected_output_path!r}"
+                )
 
             output_volume = modal.Volume.from_name(OUTPUT_VOLUME_NAME)
             download_started = time.perf_counter()
@@ -163,10 +168,20 @@ class ModalTrellis2Generator:
                 "network_blocked": payload.get("network_blocked", True),
                 "output_transport": payload.get("output_transport", "modal-volume"),
                 "output_cleanup_error": cleanup_error,
+                "vram": payload.get("vram"),
                 "scaledown_window": payload.get("scaledown_window"),
                 "container_instance_id": payload.get("container_instance_id"),
                 "model_manifest": payload.get("model_manifest"),
-                "vram": payload.get("vram"),
                 "timings": timings,
             },
         )
+
+    @staticmethod
+    def _require_inline_image(image_bytes: bytes, *, stage: str) -> None:
+        if not isinstance(image_bytes, bytes) or not image_bytes:
+            raise TypeError(f"{stage} is not non-empty bytes")
+        if len(image_bytes) > MAX_REMOTE_IMAGE_BYTES:
+            raise ValueError(
+                f"{stage} exceeds remote inline safety limit: "
+                f"{len(image_bytes)} > {MAX_REMOTE_IMAGE_BYTES} bytes"
+            )

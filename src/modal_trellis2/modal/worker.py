@@ -12,7 +12,12 @@ import modal
 from modal_trellis2.modal.app import app
 from modal_trellis2.modal.image import trellis2_image
 from modal_trellis2.modal.model_bundle import require_hf_model_dir, require_trellis_bundle
-from modal_trellis2.modal.volumes import MODEL_DIR, OUTPUT_DIR, model_volume, output_volume
+from modal_trellis2.modal.volumes import (
+    MODEL_DIR,
+    OUTPUT_DIR,
+    model_volume,
+    output_volume,
+)
 from modal_trellis2.modal.weights import (
     DINOV3_LOCAL,
     GPU_BUFFER_CONTAINERS,
@@ -32,6 +37,13 @@ from modal_trellis2.modal.weights import (
 # GPU is offline. Weights come from the CPU Volume. Do not import this
 # module from prefetch.py — `modal run -m prefetch` must stay CPU-only.
 _JOB_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
+
+
+def _compact_error(exc: BaseException, *, limit: int = 8_000) -> str:
+    text = f"{type(exc).__name__}: {exc}"
+    if len(text) <= limit:
+        return text
+    return text[: limit - 16] + "... [truncated]"
 
 
 def _offline_env() -> None:
@@ -105,9 +117,10 @@ class Trellis2Worker:
     disabled here and initialize the local, prefetched pipeline in the regular
     GPU lifecycle hook instead.
 
-    Large GLBs are written to a temporary Modal Volume so the Function result is
-    always a small metadata object. The local client downloads and verifies the
-    file, persists it in JobStore, then removes the temporary remote copy.
+    The GPU keeps outbound networking blocked. Large GLB outputs are therefore
+    written to a Modal Volume and only a small metadata dict is returned. Modal
+    routes Function outputs larger than 2 MiB through object storage, which is
+    incompatible with a fully network-blocked container.
 
     Catchable Python initialization failures are stored as ``init_error`` instead
     of escaping this lifecycle hook. Methods then return a readable error instead
@@ -117,10 +130,7 @@ class Trellis2Worker:
     @modal.enter()
     def setup_gpu(self) -> None:
         """Initialize after CUDA attach without crash-looping on catchable Python errors."""
-        import gc
         import uuid
-
-        import torch
 
         self.container_instance_id = uuid.uuid4().hex
         self.pipeline = None
@@ -130,15 +140,16 @@ class Trellis2Worker:
         self.init_error = None
         self.vram_after_load = None
 
+        # Keep even torch/native-extension imports inside the guarded path. If an
+        # image ABI/import breaks, the deployed class should return the actual
+        # initialization error once instead of repeatedly crashing @modal.enter.
         try:
             self._initialize_gpu()
         except Exception as exc:  # noqa: BLE001 - lifecycle must not crash-loop on Python errors
-            self.init_error = f"{type(exc).__name__}: {exc}"
+            self.init_error = _compact_error(exc)
             self.pipeline = None
             self.o_voxel = None
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            self._cleanup_cuda()
 
     def _initialize_gpu(self) -> None:
         import sys
@@ -178,26 +189,40 @@ class Trellis2Worker:
 
     @modal.method()
     def health(self) -> dict[str, Any]:
-        """Return GPU initialization state without converting init errors into crash loops."""
-        import torch
+        """Return GPU initialization state without hiding native import failures."""
+        cuda = False
+        gpu_name = None
+        vram = {"after_load": self.vram_after_load, "current": None}
+        cuda_error = None
+        try:
+            import torch
 
-        cuda = torch.cuda.is_available()
-        ready = self.init_error is None and self.pipeline is not None and self.o_voxel is not None
+            cuda = bool(torch.cuda.is_available())
+            if cuda:
+                gpu_name = torch.cuda.get_device_name(0)
+                vram["current"] = self._vram_stats()
+        except Exception as exc:  # noqa: BLE001 - health itself must stay serializable
+            cuda_error = f"{type(exc).__name__}: {exc}"
+
+        ready = (
+            self.init_error is None
+            and cuda_error is None
+            and self.pipeline is not None
+            and self.o_voxel is not None
+        )
         return {
             "ok": ready,
             "init_error": self.init_error,
+            "cuda_error": cuda_error,
             "cuda": cuda,
-            "gpu": torch.cuda.get_device_name(0) if cuda else None,
+            "gpu": gpu_name,
             "weights_local": bool((self.bundle_validation or {}).get("ok")),
             "source": self.weights_source,
             "offline": os.environ.get("HF_HUB_OFFLINE") == "1",
             "network_blocked": True,
             "output_transport": "modal-volume",
             "low_vram": getattr(self.pipeline, "low_vram", None),
-            "vram": {
-                "after_load": self.vram_after_load,
-                "current": self._vram_stats(),
-            },
+            "vram": vram,
             "scaledown_window": GPU_SCALEDOWN_SECONDS,
             "timeout_seconds": GPU_TIMEOUT_SECONDS,
             "min_containers": GPU_MIN_CONTAINERS,
@@ -244,13 +269,18 @@ class Trellis2Worker:
         faces = int(mesh.faces.shape[0])
         del mesh
         torch.cuda.empty_cache()
+        vram_cleanup = self._vram_stats()
         return {
             "ok": True,
             "latency_ms": elapsed_ms,
             "vertices": vertices,
             "faces": faces,
             "pipeline": pipeline_type,
-            "vram": {"before": vram_before, "after": vram_after},
+            "vram": {
+                "before": vram_before,
+                "after": vram_after,
+                "after_cleanup": vram_cleanup,
+            },
         }
 
     @modal.method()
@@ -264,7 +294,7 @@ class Trellis2Worker:
         remesh: bool = True,
         decimation_target: int | None = None,
     ) -> dict[str, Any]:
-        """Generate one GLB and return only small metadata."""
+        """Generate one GLB and return only small metadata safe under block_network."""
         import time
 
         started = time.perf_counter()
@@ -283,11 +313,13 @@ class Trellis2Worker:
             return {
                 "ok": False,
                 "error_type": type(exc).__name__,
-                "error": str(exc),
+                "error": _compact_error(exc),
                 "latency_ms": (time.perf_counter() - started) * 1000,
                 "container_instance_id": self.container_instance_id,
                 "vram": self._vram_stats(),
             }
+        finally:
+            self._cleanup_cuda()
 
     def _generate_impl(
         self,
@@ -310,9 +342,9 @@ class Trellis2Worker:
         self._require_production_request(pipeline_type, texture_size)
         relative_output = _output_relative_path(job_id)
         image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-
         torch.cuda.reset_peak_memory_stats()
         vram_before_infer = self._vram_stats()
+
         infer_started = time.perf_counter()
         mesh = self.pipeline.run(
             image,
@@ -354,9 +386,13 @@ class Trellis2Worker:
         output_path = Path(OUTPUT_DIR) / relative_output
         output_path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = output_path.with_suffix(".glb.tmp")
-        tmp_path.write_bytes(payload)
-        os.replace(tmp_path, output_path)
-        output_volume.commit()
+        try:
+            tmp_path.write_bytes(payload)
+            os.replace(tmp_path, output_path)
+            output_volume.commit()
+        except Exception:
+            tmp_path.unlink(missing_ok=True)
+            raise
         persist_ms = (time.perf_counter() - persist_started) * 1000
 
         del mesh, glb, buffer, payload
@@ -379,9 +415,6 @@ class Trellis2Worker:
             "offline": True,
             "network_blocked": True,
             "output_transport": "modal-volume",
-            "scaledown_window": GPU_SCALEDOWN_SECONDS,
-            "container_instance_id": self.container_instance_id,
-            "model_manifest": self._read_model_manifest(),
             "vram": {
                 "after_load": self.vram_after_load,
                 "before_infer": vram_before_infer,
@@ -389,6 +422,9 @@ class Trellis2Worker:
                 "after_export": vram_after_export,
                 "after_cleanup": vram_after_cleanup,
             },
+            "scaledown_window": GPU_SCALEDOWN_SECONDS,
+            "container_instance_id": self.container_instance_id,
+            "model_manifest": self._read_model_manifest(),
             "timings": {
                 "infer_ms": infer_ms,
                 "export_ms": export_ms,
@@ -397,6 +433,7 @@ class Trellis2Worker:
         }
 
     def _vram_stats(self) -> dict[str, float | None]:
+        """Return compact CUDA memory telemetry without retaining GPU tensors."""
         import torch
 
         if not torch.cuda.is_available():
@@ -418,6 +455,19 @@ class Trellis2Worker:
             "free_gb": round(free / gib, 3),
             "total_gb": round(total / gib, 3),
         }
+
+    def _cleanup_cuda(self) -> None:
+        """Best-effort cleanup that is safe even when torch/native imports are broken."""
+        try:
+            import gc
+
+            gc.collect()
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:  # noqa: BLE001 - cleanup must never mask the real error
+            return
 
     def _require_ready(self) -> None:
         if self.init_error:

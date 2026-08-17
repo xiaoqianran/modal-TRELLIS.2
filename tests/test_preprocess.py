@@ -1,26 +1,41 @@
 from io import BytesIO
 from pathlib import Path
+from random import Random
 
 from PIL import Image
 
+from modal_trellis2.core.image import MAX_REMOTE_IMAGE_BYTES, encode_remote_jpeg
 from modal_trellis2.core.preprocess import crop_to_foreground, has_useful_alpha, prepare_image
 
 
 def test_rgb_needs_cpu_rembg(sample_png: Path) -> None:
-    png, needs_rembg = prepare_image(sample_png.read_bytes())
+    payload, needs_rembg = prepare_image(sample_png.read_bytes())
     assert needs_rembg is True
-    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+    assert len(payload) <= MAX_REMOTE_IMAGE_BYTES
+    with Image.open(BytesIO(payload)) as prepared:
+        assert prepared.format == "JPEG"
+        assert prepared.mode == "RGB"
 
 
 def test_large_rgb_is_resized_before_remote_rembg() -> None:
     image = Image.new("RGB", (6000, 4000), (80, 120, 160))
     source = BytesIO()
     image.save(source, format="JPEG", quality=70)
-    png, needs_rembg = prepare_image(source.getvalue())
+    payload, needs_rembg = prepare_image(source.getvalue())
     assert needs_rembg is True
-    with Image.open(BytesIO(png)) as prepared:
+    with Image.open(BytesIO(payload)) as prepared:
         assert max(prepared.size) <= 1024
-    assert len(png) < 20 * 1024 * 1024
+    assert len(payload) <= MAX_REMOTE_IMAGE_BYTES
+
+
+def test_high_entropy_1024_image_stays_inline_safe() -> None:
+    rng = Random(42)
+    image = Image.frombytes("RGB", (1024, 1024), rng.randbytes(1024 * 1024 * 3))
+    payload = encode_remote_jpeg(image)
+    assert 0 < len(payload) <= MAX_REMOTE_IMAGE_BYTES
+    with Image.open(BytesIO(payload)) as prepared:
+        assert prepared.size == (1024, 1024)
+        assert prepared.format == "JPEG"
 
 
 def test_alpha_is_cropped_locally(tmp_path: Path) -> None:
@@ -31,13 +46,13 @@ def test_alpha_is_cropped_locally(tmp_path: Path) -> None:
     path = tmp_path / "cutout.png"
     image.save(path)
     assert has_useful_alpha(Image.open(path)) is True
-    png, needs_rembg = prepare_image(path.read_bytes())
+    payload, needs_rembg = prepare_image(path.read_bytes())
     assert needs_rembg is False
-    out = tmp_path / "out.png"
-    out.write_bytes(png)
-    cropped = Image.open(out)
-    assert cropped.mode == "RGB"
-    assert max(cropped.size) <= 1024
+    assert len(payload) <= MAX_REMOTE_IMAGE_BYTES
+    with Image.open(BytesIO(payload)) as cropped:
+        assert cropped.mode == "RGB"
+        assert cropped.format == "JPEG"
+        assert max(cropped.size) <= 1024
 
 
 def test_crop_composites_on_black() -> None:
