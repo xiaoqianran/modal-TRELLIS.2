@@ -1,84 +1,103 @@
 from __future__ import annotations
 
-from modal_trellis2.core.config import PIPELINES, Settings
-from modal_trellis2.core.generator import GenerateRequest, ImageTo3DGenerator
-from modal_trellis2.core.glb import GlbError, validate_glb
-from modal_trellis2.core.image import ImageError, encode_png, load_image
-from modal_trellis2.core.jobs import Job, JobStore
-from modal_trellis2.core.mock import MockGenerator
+from pathlib import Path
 
-
-def build_service(settings: Settings, *, dry_run: bool | None = None) -> GenerateService:
-    use_mock = settings.dry_run if dry_run is None else dry_run
-    if use_mock:
-        generator: ImageTo3DGenerator = MockGenerator()
-    else:
-        from modal_trellis2.modal.generator import ModalTrellis2Generator
-
-        generator = ModalTrellis2Generator()
-    return GenerateService(settings, generator=generator)
+from modal_trellis2.core.generator import GenerateRequest
+from modal_trellis2.core.ids import new_job_id
+from modal_trellis2.core.jobs import JobRecord, JobStore
 
 
 class GenerateService:
-    """Owns the only product contract: image bytes in, GLB file out."""
+    def __init__(self, data_dir: Path, dry_run: bool = False) -> None:
+        self.data_dir = Path(data_dir)
+        self.store = JobStore(self.data_dir)
+        self.dry_run = dry_run
 
-    def __init__(
-        self,
-        settings: Settings,
-        store: JobStore | None = None,
-        generator: ImageTo3DGenerator | None = None,
-    ) -> None:
-        self.settings = settings
-        self.store = store or JobStore(settings)
-        self.generator = generator or MockGenerator()
+    def _generator(self, dry_run: bool):
+        if dry_run:
+            from modal_trellis2.core.mock import MockGenerator
 
-    def generate(
+            return MockGenerator()
+        from modal_trellis2.modal.generator import ModalTrellis2Generator
+
+        return ModalTrellis2Generator()
+
+    def generate_bytes(
         self,
         image_bytes: bytes,
         *,
-        filename: str = "input.png",
-        seed: int | None = None,
-        pipeline: str | None = None,
+        filename: str = "image.png",
+        pipeline: str = "512",
+        seed: int = 42,
+        texture_size: int = 1024,
+        remesh: bool = True,
         dry_run: bool | None = None,
-    ) -> Job:
-        if pipeline is None:
-            pipeline = self.settings.default_pipeline
-        if pipeline not in PIPELINES:
-            raise ValueError(f"unknown pipeline {pipeline!r}; choose one of {', '.join(PIPELINES)}")
-        image = load_image(image_bytes)
-        png = encode_png(image)
-        job = self.store.create(
-            filename=filename,
-            seed=self.settings.default_seed if seed is None else seed,
+    ) -> JobRecord:
+        job_id = new_job_id()
+        output_dir = self.data_dir / "outputs"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / f"{job_id}.glb"
+        effective_dry_run = self.dry_run if dry_run is None else dry_run
+
+        job = JobRecord(
+            id=job_id,
+            status="running",
+            input_name=filename,
+            output_path=str(output_path),
             pipeline=pipeline,
-            dry_run=self.settings.dry_run if dry_run is None else dry_run,
+            seed=seed,
+            dry_run=effective_dry_run,
         )
-        self.store.save_image(job, png)
-        self.store.mark(job, "running")
-        request = GenerateRequest(
-            job_id=job.id,
-            image_bytes=png,
-            filename=job.filename,
-            seed=job.seed,
-            pipeline=job.pipeline,  # type: ignore[arg-type]
-            gpu=self.settings.default_gpu,
+        self.store.put(job)
+
+        generator = self._generator(effective_dry_run)
+        result = generator.generate(
+            GenerateRequest(
+                job_id=job_id,
+                image_bytes=image_bytes,
+                pipeline=pipeline,
+                seed=seed,
+                texture_size=texture_size,
+                remesh=remesh,
+            )
         )
-        try:
-            result = self.generator.generate(request)
-            if result.error:
-                raise RuntimeError(result.error)
-            if not result.glb_bytes:
-                raise RuntimeError("generator returned no GLB")
-            validate_glb(result.glb_bytes)
-        except (ImageError, GlbError, RuntimeError, ValueError) as exc:
-            return self.store.mark(job, "failed", error=str(exc))
-        self.store.save_glb(job, result.glb_bytes)
-        return self.store.mark(
-            job,
-            "completed",
-            latency_ms=result.latency_ms,
-            dry_run=result.dry_run,
-            telemetry=result.telemetry,
-            glb_filename=result.filename,
-            glb_size_bytes=len(result.glb_bytes),
+        if not result.ok:
+            job.status = "failed"
+            job.error = result.error or "generation failed"
+            job.latency_ms = result.latency_ms
+            job.telemetry = result.telemetry
+            self.store.put(job)
+            return job
+
+        output_path.write_bytes(result.glb_bytes or b"")
+        job.status = "completed"
+        job.latency_ms = result.latency_ms
+        job.glb_size_bytes = output_path.stat().st_size
+        job.telemetry = result.telemetry
+        self.store.put(job)
+        return job
+
+    def generate_path(
+        self,
+        image_path: Path,
+        output_path: Path,
+        *,
+        pipeline: str = "512",
+        seed: int = 42,
+        texture_size: int = 1024,
+        remesh: bool = True,
+    ) -> JobRecord:
+        job = self.generate_bytes(
+            Path(image_path).read_bytes(),
+            filename=Path(image_path).name,
+            pipeline=pipeline,
+            seed=seed,
+            texture_size=texture_size,
+            remesh=remesh,
         )
+        if job.status == "completed" and job.output_path:
+            target = Path(output_path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(Path(job.output_path).read_bytes())
+            job.output_path = str(target)
+        return job
