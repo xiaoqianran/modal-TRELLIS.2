@@ -1,93 +1,27 @@
 from __future__ import annotations
 
+import importlib.util
 import shutil
-from dataclasses import dataclass, field
-from pathlib import Path
-
-from modal_trellis2 import __version__
-from modal_trellis2.core.config import Settings, load_settings
+from typing import Any
 
 
-@dataclass
-class Check:
-    name: str
-    ok: bool
-    detail: str
-
-
-@dataclass
-class DoctorReport:
-    ready: bool
-    version: str
-    checks: list[Check] = field(default_factory=list)
-
-
-def run_doctor(settings: Settings | None = None) -> DoctorReport:
-    settings = settings or load_settings()
-    checks = [
-        _writable("data dir", settings.data_dir),
-        _writable("jobs dir", settings.jobs_dir),
-        _command("codegraph", "codegraph"),
-        _optional_dir("vendor/TRELLIS.2", Path("vendor/TRELLIS.2")),
-        _optional_dir("vendor/fast-trellis2", Path("vendor/fast-trellis2")),
-        _optional_dir("vendor/meshii", Path("vendor/meshii")),
-        Check(
-            name="generator",
-            ok=True,
-            detail=(
-                "dry-run mock cube"
-                if settings.dry_run
-                else "official microsoft/TRELLIS.2-4B via Modal"
-            ),
-        ),
-        _env_present("HF_TOKEN"),
-        _command("gh", "gh"),
-        _command("modal", "modal"),
-        _modal_profile(),
-    ]
-    ready = all(check.ok for check in checks if check.name in {"data dir", "jobs dir"})
-    return DoctorReport(ready=ready, version=__version__, checks=checks)
-
-
-def _writable(name: str, path: Path) -> Check:
-    try:
-        path.mkdir(parents=True, exist_ok=True)
-        probe = path / ".doctor-write"
-        probe.write_text("ok", encoding="utf-8")
-        probe.unlink()
-        return Check(name, True, str(path.resolve()))
-    except OSError as exc:
-        return Check(name, False, str(exc))
-
-
-def _command(name: str, binary: str) -> Check:
-    found = shutil.which(binary)
-    if found:
-        return Check(name, True, found)
-    return Check(name, False, f"{binary} not on PATH (optional; used to index vendor repos)")
-
-
-def _env_present(name: str) -> Check:
-    import os
-
-    from dotenv import dotenv_values
-
-    if os.environ.get(name):
-        return Check(name, True, "set")
-    values = dotenv_values(Path(".env"))
-    if values.get(name):
-        return Check(name, True, "set in .env")
-    return Check(name, False, f"{name} missing (optional for dry-run)")
-
-
-def _modal_profile() -> Check:
-    config = Path.home() / ".modal.toml"
-    if config.is_file():
-        return Check("modal token", True, str(config))
-    return Check("modal token", False, "~/.modal.toml missing — run modal token set")
-
-
-def _optional_dir(name: str, path: Path) -> Check:
-    if path.is_dir() and any(path.iterdir()):
-        return Check(name, True, str(path.resolve()))
-    return Check(name, False, f"missing — run scripts/fetch-upstream.sh (optional local reference)")
+def run_doctor() -> dict[str, Any]:
+    """Inspect local prerequisites without starting a GPU container."""
+    checks = {
+        "python": True,
+        "modal_importable": importlib.util.find_spec("modal") is not None,
+        "git": shutil.which("git") is not None,
+    }
+    return {
+        "ok": all(checks.values()),
+        "checks": checks,
+        "gpu_policy": {
+            "production_gpu": "A100-80GB",
+            "min_containers": 0,
+            "max_containers": 1,
+            "buffer_containers": 0,
+            "scaledown_window_seconds": 10,
+            "request_gpu_override": False,
+        },
+        "note": "doctor is local-only and never starts the production GPU",
+    }
