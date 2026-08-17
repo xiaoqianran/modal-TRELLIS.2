@@ -9,8 +9,13 @@ RMBG_REPO = "briaai/RMBG-2.0"
 SS_DEC_REPO = "microsoft/TRELLIS-image-large"
 SS_DEC_NAME = "ss_dec_conv3d_16l8_fp16"
 
-# GPU must die quickly. Weights stay on the CPU Volume / memory snapshot.
+# Production cost policy.
+# Keep a single fixed GPU pool, queue bursts onto it, then scale to zero quickly.
+PRODUCTION_GPU = "A100-80GB"
 GPU_SCALEDOWN_SECONDS = 10
+GPU_MIN_CONTAINERS = 0
+GPU_MAX_CONTAINERS = 1
+GPU_BUFFER_CONTAINERS = 0
 
 # 512 is the live default. Skip the 1024 flow weights until a job needs them.
 MODELS_512: tuple[str, ...] = (
