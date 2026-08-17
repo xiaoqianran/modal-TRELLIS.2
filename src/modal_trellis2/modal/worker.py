@@ -98,16 +98,39 @@ class Trellis2Worker:
     disabled here and initialize the local, prefetched pipeline in the regular
     GPU lifecycle hook instead.
 
-    Cost policy: this production worker has exactly one GPU container at a time.
-    Bursty requests queue onto that container instead of scaling out to more GPUs.
-    When the queue drains, the container scales to zero after the short idle window.
+    Catchable Python initialization failures are stored as ``init_error`` instead
+    of escaping this lifecycle hook. This keeps a bad preflight/import/model load
+    from turning into a deployed-container crash loop; methods then fail once with
+    the actual initialization error and the container can scale down normally.
     """
 
     @modal.enter()
     def setup_gpu(self) -> None:
-        """Validate the offline bundle, then import TRELLIS after CUDA is attached."""
-        import sys
+        """Initialize after CUDA attach without crash-looping on catchable Python errors."""
+        import gc
         import uuid
+
+        import torch
+
+        self.container_instance_id = uuid.uuid4().hex
+        self.pipeline = None
+        self.o_voxel = None
+        self.weights_source = f"{MODEL_DIR}/trellis2"
+        self.bundle_validation = None
+        self.init_error = None
+
+        try:
+            self._initialize_gpu()
+        except Exception as exc:  # noqa: BLE001 - lifecycle must not crash-loop on Python errors
+            self.init_error = f"{type(exc).__name__}: {exc}"
+            self.pipeline = None
+            self.o_voxel = None
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+    def _initialize_gpu(self) -> None:
+        import sys
 
         import o_voxel
         import torch
@@ -129,33 +152,37 @@ class Trellis2Worker:
         from trellis2.pipelines import Trellis2ImageTo3DPipeline
 
         Trellis2ImageTo3DPipeline.model_names_to_load = list(MODELS_512)
-        self.pipeline = Trellis2ImageTo3DPipeline.from_pretrained(weights)
-        self.pipeline.rembg_model = None
-        self.pipeline.low_vram = False
+        pipeline = Trellis2ImageTo3DPipeline.from_pretrained(weights)
+        pipeline.rembg_model = None
+        pipeline.low_vram = False
+        self.pipeline = pipeline
         self._require_loaded_models()
-        self.pipeline.cuda()
+        pipeline.cuda()
 
         self.o_voxel = o_voxel
         self.weights_source = weights
         self.bundle_validation = bundle_validation
-        self.container_instance_id = uuid.uuid4().hex
 
     @modal.method()
     def health(self) -> dict[str, Any]:
-        """Confirm the GPU container loaded the complete pinned bundle. Starts a GPU."""
+        """Return GPU initialization state without converting init errors into crash loops."""
         import torch
 
-        weights = f"{MODEL_DIR}/trellis2"
+        cuda = torch.cuda.is_available()
+        ready = self.init_error is None and self.pipeline is not None and self.o_voxel is not None
         return {
-            "ok": self.pipeline is not None,
-            "cuda": torch.cuda.is_available(),
-            "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
-            "weights_local": bool(getattr(self, "bundle_validation", {}).get("ok")),
-            "source": getattr(self, "weights_source", weights),
+            "ok": ready,
+            "init_error": self.init_error,
+            "cuda": cuda,
+            "gpu": torch.cuda.get_device_name(0) if cuda else None,
+            "weights_local": bool((self.bundle_validation or {}).get("ok")),
+            "source": self.weights_source,
             "offline": os.environ.get("HF_HUB_OFFLINE") == "1",
             "network_blocked": True,
-            "low_vram": self.pipeline.low_vram,
-            "vram_gb": round(torch.cuda.get_device_properties(0).total_memory / 2**30, 1),
+            "low_vram": getattr(self.pipeline, "low_vram", None),
+            "vram_gb": round(torch.cuda.get_device_properties(0).total_memory / 2**30, 1)
+            if cuda
+            else None,
             "scaledown_window": GPU_SCALEDOWN_SECONDS,
             "timeout_seconds": GPU_TIMEOUT_SECONDS,
             "min_containers": GPU_MIN_CONTAINERS,
@@ -183,8 +210,8 @@ class Trellis2Worker:
         import torch
         from PIL import Image
 
+        self._require_ready()
         self._require_production_pipeline(pipeline_type)
-        self._require_loaded_models()
         image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         started = time.perf_counter()
         mesh = self.pipeline.run(
@@ -222,8 +249,8 @@ class Trellis2Worker:
         from PIL import Image
 
         started = time.perf_counter()
+        self._require_ready()
         self._require_production_request(pipeline_type, texture_size)
-        self._require_loaded_models()
         image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         infer_started = time.perf_counter()
         mesh = self.pipeline.run(
@@ -270,7 +297,7 @@ class Trellis2Worker:
             "decimation_target": target,
             "texture_size": texture_size,
             "remesh": remesh,
-            "source": getattr(self, "weights_source", f"{MODEL_DIR}/trellis2"),
+            "source": self.weights_source,
             "source_revision": TRELLIS2_SOURCE_REVISION,
             "model_revision": TRELLIS2_MODEL_REVISION,
             "offline": True,
@@ -283,6 +310,13 @@ class Trellis2Worker:
                 "export_ms": export_ms,
             },
         }
+
+    def _require_ready(self) -> None:
+        if self.init_error:
+            raise RuntimeError(f"GPU initialization failed: {self.init_error}")
+        if self.pipeline is None or self.o_voxel is None:
+            raise RuntimeError("GPU worker initialized without a usable TRELLIS.2 pipeline")
+        self._require_loaded_models()
 
     def _require_production_request(self, pipeline_type: str, texture_size: int) -> None:
         self._require_production_pipeline(pipeline_type)
@@ -300,6 +334,8 @@ class Trellis2Worker:
             )
 
     def _require_loaded_models(self) -> None:
+        if self.pipeline is None:
+            raise RuntimeError("TRELLIS.2 pipeline is not initialized")
         missing = [name for name in MODELS_512 if name not in self.pipeline.models]
         if missing:
             raise RuntimeError(
