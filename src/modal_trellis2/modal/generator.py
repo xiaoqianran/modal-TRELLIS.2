@@ -8,7 +8,7 @@ from modal_trellis2.modal.weights import PRODUCTION_GPU
 
 
 class ModalTrellis2Generator:
-    """CPU rembg first, then the deployed GPU worker. Core stays free of Modal at rest."""
+    """CPU preflight/rembg first, then the deployed GPU worker."""
 
     def generate(self, request: GenerateRequest) -> GenerateResult:
         started = time.perf_counter()
@@ -20,6 +20,25 @@ class ModalTrellis2Generator:
             return GenerateResult(
                 job_id=request.job_id,
                 error=f"Modal client import failed: {exc}",
+                latency_ms=(time.perf_counter() - started) * 1000,
+            )
+
+        # Never discover a partial/mismatched Volume after the A100 has started.
+        try:
+            preflight_fn = modal.Function.from_name(APP_NAME, "prefetch_status")
+            preflight = preflight_fn.remote()
+            if not isinstance(preflight, dict):
+                raise TypeError(f"prefetch_status returned {type(preflight).__name__}, expected dict")
+            if not preflight.get("ok"):
+                raise RuntimeError(f"offline model bundle is not ready: {preflight}")
+        except Exception as exc:  # noqa: BLE001
+            return GenerateResult(
+                job_id=request.job_id,
+                error=(
+                    f"CPU preflight failed before GPU launch: {exc}. "
+                    "Run `uv run modal-trellis2 prefetch` and confirm "
+                    "`uv run modal-trellis2 prefetch --status` returns ok=true, then deploy."
+                ),
                 latency_ms=(time.perf_counter() - started) * 1000,
             )
 
