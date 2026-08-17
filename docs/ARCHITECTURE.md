@@ -33,11 +33,14 @@ ImageTo3DGenerator
         prefetch.py        CPU：HF 下载 4B + DINOv3 + BiRefNet → Volume
         CpuPreprocessor    CPU：BiRefNet 抠图（上传已有 alpha 则本地做）
         Trellis2Worker     GPU：内存快照恢复 → .cuda() → run → to_glb
+                           固定 A100-80GB，最多 1 个 container
                            scaledown_window=10，HF offline，不下载
 ```
 
 GPU 只做两件事：把已经在 CPU 里的权重量到显存，以及官方推理 / `to_glb`（nvdiffrast 必须 CUDA）。  
 下载、Volume 写入、抠图、crop 都不准占 GPU。空闲 10 秒释放 A100。
+
+生产 GPU 策略明确为：`min_containers=0`、`max_containers=1`、`buffer_containers=0`、固定 `A100-80GB`。突发提交不会横向扩成多张 GPU，而是排队复用同一个 warm container。普通生成路径禁止 `with_options(gpu=...)`，因为不同动态 GPU 配置会形成独立 autoscaling pool；其他 GPU 型号只允许走独立 benchmark/实验入口。
 
 Core **不** import `trellis2` / `torch`。GPU 镜像、wheel、HuggingFace 权重只活在 `src/modal_trellis2/modal/`。
 
