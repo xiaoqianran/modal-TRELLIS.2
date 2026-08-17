@@ -29,15 +29,17 @@ uv run modal-trellis2 web
 
 打开 http://127.0.0.1:7863 。默认 **官方 TRELLIS.2-4B**，当前生产合同只开放 `pipeline=512`。  
 权重只在 CPU prefetch 下载。GPU 离线加载 Volume，空闲 **10 秒**释放。  
-生产 GPU 固定为 **A100-80GB**，最多 **1 个 GPU container**；连续请求排队并优先复用同一个 warm container，不会因为突发提交横向扩成多张 GPU。A100 使用 **FlashAttention 2**，不强制使用面向 Hopper 的 FA3。  
-只有勾上 dry-run / 传 `--dry-run` 才会回立方体。生产输入限制为：上传文件 ≤20MB、解码后 ≤4000 万像素、进入远程处理前最长边缩到 ≤1024、`texture_size` 只能是 `256/512/1024`；GLB RPC 返回设置 90MB 安全上限；Web live 队列一次最多 20 张。
+生产 GPU 固定为 **A100-80GB**，最多 **1 个 GPU container**；连续请求排队并优先复用同一个 warm container，不会因为突发提交横向扩成多张 GPU。当前 TRELLIS 镜像保留已经进入生产验证路径的 **`flash_attn_3`** backend；后续不要仅凭通用硬件判断切换 attention backend，必须单独做 live 兼容性/性能验证。  
+只有勾上 dry-run / 传 `--dry-run` 才会回立方体。生产输入限制为：上传文件 ≤20MB、解码后 ≤4000 万像素、进入远程处理前最长边缩到 ≤1024、`texture_size` 只能是 `256/512/1024`；Web live 队列一次最多 20 张。
+
+生成后的大 GLB 不直接塞进 Function 返回值：GPU 先写临时 `modal-trellis2-results` Volume，只返回小 metadata；本地 Modal client 再下载并校验文件大小，JobStore 落盘成功后删除远程临时副本。这样本地 JobStore 仍然是最终用户文件的唯一持久副本。
 
 ## 成本策略
 
 ```text
 Hugging Face
     ↓
-CPU prefetch + 完整性校验 → Modal Volume
+CPU prefetch + 完整性校验 → model Volume
                   ↓
         CPU preflight（ok=true?）
                   ↓
@@ -48,12 +50,16 @@ RGB 上传 → CPU rembg（可 warm 5 分钟）
         唯一 A100-80GB container
            job1 → job2 → job3
                   ↓
-             idle 10 sec
+         临时 result Volume
                   ↓
-              scale to zero
+        本地下载 / 校验 / JobStore
+                  ↓
+       删除远程临时 GLB 副本
 ```
 
-生产 worker 明确使用：`min_containers=0`、`max_containers=1`、`buffer_containers=0`、`scaledown_window=10`、单输入最长 10 分钟；普通生成路径不使用动态 `with_options(gpu=...)`，也不使用 `@modal.concurrent`。GPU 设置 `HF_HUB_OFFLINE=1` / `TRANSFORMERS_OFFLINE=1`，并启用 `block_network=True`，运行时整个外网被封死，不会在昂贵 GPU 上下载模型。
+生产 worker 明确使用：`min_containers=0`、`max_containers=1`、`buffer_containers=0`、`scaledown_window=10`、单输入最长 10 分钟；普通生成路径不使用动态 `with_options(gpu=...)`，也不使用 `@modal.concurrent`。GPU 设置 `HF_HUB_OFFLINE=1` / `TRANSFORMERS_OFFLINE=1`，并启用 `block_network=True`，运行时不会在昂贵 GPU 上下载模型。
+
+每次 GPU health / generation 都记录显存数据；generation telemetry 包含 `after_load`、`before_infer`、`after_infer`、`after_export`、`after_cleanup`，并记录 `allocated/reserved/peak/free/total`。第一次正式 512 run 后应直接看这些字段判断 A100 80GB 的真实显存余量，不再靠估计。
 
 需要测试其他 GPU 时应走独立 benchmark/实验路径，不要改变生产生成请求的 GPU 配置。
 

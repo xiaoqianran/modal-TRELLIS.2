@@ -12,12 +12,7 @@ import modal
 from modal_trellis2.modal.app import app
 from modal_trellis2.modal.image import trellis2_image
 from modal_trellis2.modal.model_bundle import require_hf_model_dir, require_trellis_bundle
-from modal_trellis2.modal.volumes import (
-    MODEL_DIR,
-    OUTPUT_DIR,
-    model_volume,
-    output_volume,
-)
+from modal_trellis2.modal.volumes import MODEL_DIR, OUTPUT_DIR, model_volume, output_volume
 from modal_trellis2.modal.weights import (
     DINOV3_LOCAL,
     GPU_BUFFER_CONTAINERS,
@@ -110,10 +105,9 @@ class Trellis2Worker:
     disabled here and initialize the local, prefetched pipeline in the regular
     GPU lifecycle hook instead.
 
-    The GPU keeps outbound networking blocked. Large GLB outputs are therefore
-    written to a Modal Volume and only a small metadata dict is returned. Modal
-    routes Function outputs larger than 2 MiB through object storage, which is
-    incompatible with a fully network-blocked container.
+    Large GLBs are written to a temporary Modal Volume so the Function result is
+    always a small metadata object. The local client downloads and verifies the
+    file, persists it in JobStore, then removes the temporary remote copy.
 
     Catchable Python initialization failures are stored as ``init_error`` instead
     of escaping this lifecycle hook. Methods then return a readable error instead
@@ -134,6 +128,7 @@ class Trellis2Worker:
         self.weights_source = f"{MODEL_DIR}/trellis2"
         self.bundle_validation = None
         self.init_error = None
+        self.vram_after_load = None
 
         try:
             self._initialize_gpu()
@@ -174,10 +169,12 @@ class Trellis2Worker:
         self.pipeline = pipeline
         self._require_loaded_models()
         pipeline.cuda()
+        torch.cuda.synchronize()
 
         self.o_voxel = o_voxel
         self.weights_source = weights
         self.bundle_validation = bundle_validation
+        self.vram_after_load = self._vram_stats()
 
     @modal.method()
     def health(self) -> dict[str, Any]:
@@ -197,9 +194,10 @@ class Trellis2Worker:
             "network_blocked": True,
             "output_transport": "modal-volume",
             "low_vram": getattr(self.pipeline, "low_vram", None),
-            "vram_gb": round(torch.cuda.get_device_properties(0).total_memory / 2**30, 1)
-            if cuda
-            else None,
+            "vram": {
+                "after_load": self.vram_after_load,
+                "current": self._vram_stats(),
+            },
             "scaledown_window": GPU_SCALEDOWN_SECONDS,
             "timeout_seconds": GPU_TIMEOUT_SECONDS,
             "min_containers": GPU_MIN_CONTAINERS,
@@ -230,6 +228,8 @@ class Trellis2Worker:
         self._require_ready()
         self._require_production_pipeline(pipeline_type)
         image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        torch.cuda.reset_peak_memory_stats()
+        vram_before = self._vram_stats()
         started = time.perf_counter()
         mesh = self.pipeline.run(
             image,
@@ -239,6 +239,7 @@ class Trellis2Worker:
         )[0]
         torch.cuda.synchronize()
         elapsed_ms = (time.perf_counter() - started) * 1000
+        vram_after = self._vram_stats()
         vertices = int(mesh.vertices.shape[0])
         faces = int(mesh.faces.shape[0])
         del mesh
@@ -249,6 +250,7 @@ class Trellis2Worker:
             "vertices": vertices,
             "faces": faces,
             "pipeline": pipeline_type,
+            "vram": {"before": vram_before, "after": vram_after},
         }
 
     @modal.method()
@@ -262,7 +264,7 @@ class Trellis2Worker:
         remesh: bool = True,
         decimation_target: int | None = None,
     ) -> dict[str, Any]:
-        """Generate one GLB and return only small metadata safe under block_network."""
+        """Generate one GLB and return only small metadata."""
         import time
 
         started = time.perf_counter()
@@ -284,6 +286,7 @@ class Trellis2Worker:
                 "error": str(exc),
                 "latency_ms": (time.perf_counter() - started) * 1000,
                 "container_instance_id": self.container_instance_id,
+                "vram": self._vram_stats(),
             }
 
     def _generate_impl(
@@ -308,6 +311,8 @@ class Trellis2Worker:
         relative_output = _output_relative_path(job_id)
         image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
 
+        torch.cuda.reset_peak_memory_stats()
+        vram_before_infer = self._vram_stats()
         infer_started = time.perf_counter()
         mesh = self.pipeline.run(
             image,
@@ -315,7 +320,9 @@ class Trellis2Worker:
             pipeline_type=pipeline_type,
             preprocess_image=False,
         )[0]
+        torch.cuda.synchronize()
         infer_ms = (time.perf_counter() - infer_started) * 1000
+        vram_after_infer = self._vram_stats()
         mesh.simplify(16_777_216)
 
         export_started = time.perf_counter()
@@ -337,9 +344,11 @@ class Trellis2Worker:
         )
         buffer = io.BytesIO()
         glb.export(buffer, file_type="glb")
+        torch.cuda.synchronize()
         payload = buffer.getvalue()
         payload_size = len(payload)
         export_ms = (time.perf_counter() - export_started) * 1000
+        vram_after_export = self._vram_stats()
 
         persist_started = time.perf_counter()
         output_path = Path(OUTPUT_DIR) / relative_output
@@ -352,6 +361,7 @@ class Trellis2Worker:
 
         del mesh, glb, buffer, payload
         torch.cuda.empty_cache()
+        vram_after_cleanup = self._vram_stats()
 
         return {
             "ok": True,
@@ -372,11 +382,41 @@ class Trellis2Worker:
             "scaledown_window": GPU_SCALEDOWN_SECONDS,
             "container_instance_id": self.container_instance_id,
             "model_manifest": self._read_model_manifest(),
+            "vram": {
+                "after_load": self.vram_after_load,
+                "before_infer": vram_before_infer,
+                "after_infer": vram_after_infer,
+                "after_export": vram_after_export,
+                "after_cleanup": vram_after_cleanup,
+            },
             "timings": {
                 "infer_ms": infer_ms,
                 "export_ms": export_ms,
                 "persist_ms": persist_ms,
             },
+        }
+
+    def _vram_stats(self) -> dict[str, float | None]:
+        import torch
+
+        if not torch.cuda.is_available():
+            return {
+                "allocated_gb": None,
+                "reserved_gb": None,
+                "peak_allocated_gb": None,
+                "peak_reserved_gb": None,
+                "free_gb": None,
+                "total_gb": None,
+            }
+        free, total = torch.cuda.mem_get_info()
+        gib = 2**30
+        return {
+            "allocated_gb": round(torch.cuda.memory_allocated() / gib, 3),
+            "reserved_gb": round(torch.cuda.memory_reserved() / gib, 3),
+            "peak_allocated_gb": round(torch.cuda.max_memory_allocated() / gib, 3),
+            "peak_reserved_gb": round(torch.cuda.max_memory_reserved() / gib, 3),
+            "free_gb": round(free / gib, 3),
+            "total_gb": round(total / gib, 3),
         }
 
     def _require_ready(self) -> None:

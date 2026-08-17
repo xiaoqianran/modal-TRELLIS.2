@@ -166,6 +166,7 @@ class ModalTrellis2Generator:
                 "scaledown_window": payload.get("scaledown_window"),
                 "container_instance_id": payload.get("container_instance_id"),
                 "model_manifest": payload.get("model_manifest"),
+                "vram": payload.get("vram"),
                 "timings": timings,
             },
         )
