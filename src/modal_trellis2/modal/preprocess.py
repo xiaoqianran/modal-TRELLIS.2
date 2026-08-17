@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import io
-import os
+from pathlib import Path
 from typing import Any
 
 import modal
@@ -9,6 +9,7 @@ import modal
 from modal_trellis2.core.preprocess import crop_to_foreground
 from modal_trellis2.modal.app import app
 from modal_trellis2.modal.image import cpu_runtime_image
+from modal_trellis2.modal.model_bundle import hf_model_ready
 from modal_trellis2.modal.volumes import MODEL_DIR, model_volume
 from modal_trellis2.modal.weights import BIREFNET_LOCAL, BIREFNET_REPO, RMBG_LOCAL, RMBG_REPO
 
@@ -28,7 +29,7 @@ from modal_trellis2.modal.weights import BIREFNET_LOCAL, BIREFNET_REPO, RMBG_LOC
     },
 )
 class CpuPreprocessor:
-    """BiRefNet on CPU. GPU worker never loads this model."""
+    """Background removal on CPU. GPU worker never loads this model."""
 
     @modal.enter()
     def setup(self) -> None:
@@ -36,25 +37,42 @@ class CpuPreprocessor:
         from transformers import AutoModelForImageSegmentation
 
         model_volume.reload()
-        rmbg = f"{MODEL_DIR}/{RMBG_LOCAL}"
-        biref = f"{MODEL_DIR}/{BIREFNET_LOCAL}"
-        if os.path.isfile(os.path.join(rmbg, "config.json")):
-            source = rmbg
-        elif os.path.isfile(os.path.join(biref, "config.json")):
-            source = biref
-        else:
-            source = RMBG_REPO
-        try:
-            self.model = AutoModelForImageSegmentation.from_pretrained(
-                source,
-                trust_remote_code=True,
-                local_files_only=True,
-            )
-        except Exception as exc:  # noqa: BLE001
+        candidates = (
+            (RMBG_REPO, Path(MODEL_DIR) / RMBG_LOCAL),
+            (BIREFNET_REPO, Path(MODEL_DIR) / BIREFNET_LOCAL),
+        )
+        ready = [(repo, path) for repo, path in candidates if hf_model_ready(path)]
+        if not ready:
             raise RuntimeError(
-                f"BiRefNet is not on the Volume. Run `modal-trellis2 prefetch` (CPU). {exc}"
-            ) from exc
-        self.model.eval()
+                "No complete background-removal model is on the Volume. "
+                "Run `uv run modal-trellis2 prefetch` on CPU first."
+            )
+
+        failures: list[str] = []
+        self.model = None
+        self.model_repo = None
+        self.model_source = None
+        for repo, source in ready:
+            try:
+                model = AutoModelForImageSegmentation.from_pretrained(
+                    str(source),
+                    trust_remote_code=True,
+                    local_files_only=True,
+                )
+            except Exception as exc:  # noqa: BLE001
+                failures.append(f"{repo}: {type(exc).__name__}: {exc}")
+                continue
+            self.model = model.eval()
+            self.model_repo = repo
+            self.model_source = str(source)
+            break
+
+        if self.model is None:
+            raise RuntimeError(
+                "All complete local background-removal bundles failed to load: "
+                + " | ".join(failures)
+            )
+
         self.transform = transforms.Compose(
             [
                 transforms.Resize((1024, 1024)),
@@ -81,7 +99,12 @@ class CpuPreprocessor:
 
     @modal.method()
     def health(self) -> dict[str, Any]:
-        return {"ok": self.model is not None, "device": "cpu", "model": BIREFNET_REPO}
+        return {
+            "ok": self.model is not None,
+            "device": "cpu",
+            "model": self.model_repo,
+            "source": self.model_source,
+        }
 
 
 def transforms_to_pil(mask):  # torch.Tensor

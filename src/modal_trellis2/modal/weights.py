@@ -3,6 +3,9 @@ from __future__ import annotations
 # Shared Volume layout. Prefetch and the GPU worker must agree.
 TRELLIS2_REPO = "microsoft/TRELLIS.2-4B"
 TRELLIS2_SOURCE_REVISION = "75fbf0183001ed9876c8dbb35de6b68552ee08bd"
+# Keep model metadata/weights aligned with the source revision above. A floating
+# Hugging Face HEAD can silently change pipeline.json underneath pinned code.
+TRELLIS2_MODEL_REVISION = "af44b45f2e35a493886929c6d786e563ec68364d"
 DINOV3_REPO = "facebook/dinov3-vitl16-pretrain-lvd1689m"
 DINOV3_URL = f"https://huggingface.co/{DINOV3_REPO}"
 BIREFNET_REPO = "ZhengPeng7/BiRefNet"

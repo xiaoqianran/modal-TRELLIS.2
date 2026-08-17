@@ -30,7 +30,8 @@ def test_gpu_worker_is_offline_and_requires_prefetch() -> None:
 
     assert '"HF_HUB_OFFLINE": "1"' in source
     assert '"TRANSFORMERS_OFFLINE": "1"' in source
-    assert "Run `modal-trellis2 prefetch` on CPU first. GPU will not download." in source
+    assert "require_trellis_bundle" in source
+    assert "require_hf_model_dir" in source
     assert "snapshot_download(" in prefetch
     assert "model_volume.commit()" in prefetch
 

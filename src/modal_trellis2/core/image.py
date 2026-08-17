@@ -6,6 +6,7 @@ from PIL import Image, UnidentifiedImageError
 
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_IMAGE_PIXELS = 40_000_000
+MAX_MODEL_IMAGE_SIDE = 1024
 ALLOWED_MODES = {"RGB", "RGBA", "L", "P"}
 
 
@@ -34,6 +35,18 @@ def load_image(data: bytes) -> Image.Image:
     return image
 
 
+def resize_for_model(image: Image.Image) -> Image.Image:
+    """Match TRELLIS.2's 1024px input ceiling before any remote/RPC boundary."""
+    longest = max(image.size)
+    if longest <= MAX_MODEL_IMAGE_SIDE:
+        return image
+    scale = MAX_MODEL_IMAGE_SIDE / longest
+    return image.resize(
+        (max(1, int(image.width * scale)), max(1, int(image.height * scale))),
+        Image.Resampling.LANCZOS,
+    )
+
+
 def average_color(image: Image.Image) -> tuple[float, float, float]:
     rgb = image.convert("RGB").resize((1, 1), Image.Resampling.BOX)
     pixel = rgb.getpixel((0, 0))
@@ -44,5 +57,5 @@ def average_color(image: Image.Image) -> tuple[float, float, float]:
 
 def encode_png(image: Image.Image) -> bytes:
     buffer = io.BytesIO()
-    image.convert("RGBA").save(buffer, format="PNG")
+    resize_for_model(image).convert("RGBA").save(buffer, format="PNG")
     return buffer.getvalue()

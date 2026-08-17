@@ -38,8 +38,9 @@ cpu_runtime_image = (
 )
 
 # Official TRELLIS.2 stack: CUDA 12.4 + PyTorch 2.6.0.
-# Native extensions come from JeffreyXiang's Space wheels (same set Meshii used),
-# so Modal does not compile flash-attn / o-voxel / nvdiffrast from source.
+# Keep the prebuilt backend that has now completed all three TRELLIS sampling
+# stages on the real production run; do not replace a demonstrated working CUDA
+# path based only on generic hardware assumptions.
 CUDA_VERSION = "12.4.0"
 PREBUILT_WHEELS = "https://github.com/JeffreyXiang/Storages/releases/download/Space_Wheels_251210"
 

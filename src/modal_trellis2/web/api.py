@@ -10,7 +10,7 @@ from modal_trellis2 import __version__
 from modal_trellis2.application import build_service
 from modal_trellis2.core.config import PIPELINE_HINTS, PIPELINES, Settings, load_settings
 from modal_trellis2.core.doctor import run_doctor
-from modal_trellis2.core.image import ImageError
+from modal_trellis2.core.image import MAX_IMAGE_BYTES, ImageError
 from modal_trellis2.core.service import GenerateService
 from modal_trellis2.modal.weights import PRODUCTION_GPU, TRELLIS2_REPO
 
@@ -77,7 +77,9 @@ async def generate(
     """Generate through the fixed production pool; GPU choice is not a request field."""
     if not image.filename:
         raise HTTPException(status_code=400, detail="missing image filename")
-    payload = await image.read()
+    payload = await image.read(MAX_IMAGE_BYTES + 1)
+    if len(payload) > MAX_IMAGE_BYTES:
+        raise HTTPException(status_code=413, detail="image larger than 20MB")
     if not payload:
         raise HTTPException(status_code=400, detail="empty image")
 
@@ -102,6 +104,7 @@ async def generate(
 
 @router.get("/jobs")
 def list_jobs(limit: int = 50) -> list[dict[str, Any]]:
+    limit = max(1, min(limit, 200))
     return [job.public_dict() for job in _service.store.list_jobs(limit=limit)]
 
 

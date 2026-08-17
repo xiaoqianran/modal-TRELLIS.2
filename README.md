@@ -17,26 +17,29 @@ uv sync
 cp .env.example .env
 
 uv run modal-trellis2 doctor
-uv run modal-trellis2 prefetch          # CPU 下载官方 4B + DINOv3 + BiRefNet → Volume
-uv run modal-trellis2 deploy            # 注册 CPU 抠图 + GPU worker（modal_trellis2.modal.deploy）
+uv run modal-trellis2 prefetch          # CPU 下载并完整校验生产模型包 → Volume
+uv run modal-trellis2 prefetch --status # 必须看到 ok=true；仍然不点 GPU
+uv run modal-trellis2 deploy            # 注册 CPU 抠图 + GPU worker
 uv run modal-trellis2 health            # 只查 Volume，不点 GPU
 uv run modal-trellis2 generate path/to/photo.png -o /tmp/mesh.glb
 uv run modal-trellis2 web
 ```
 
-`uv sync` 会默认安装项目依赖，包括 `modal[api-proxy-support]`，适合本地需要代理访问 Modal API 的环境。
+`uv sync` 会默认安装项目依赖，包括 `modal[api-proxy-support]`，适合本地需要代理访问 Modal API 的环境。**更新本仓库后首次运行请重新执行一次 `prefetch`；`prefetch --status` 没有返回 `ok=true` 时不要启动 A100。** live generation 自己也会先调用 CPU-only `prefetch_status`，模型包不完整时直接拒绝进入 GPU 路径。
 
 打开 http://127.0.0.1:7863 。默认 **官方 TRELLIS.2-4B**，当前生产合同只开放 `pipeline=512`。  
 权重只在 CPU prefetch 下载。GPU 离线加载 Volume，空闲 **10 秒**释放。  
-生产 GPU 固定为 **A100-80GB**，最多 **1 个 GPU container**；连续请求排队并优先复用同一个 warm container，不会因为突发提交横向扩成多张 GPU。  
-只有勾上 dry-run / 传 `--dry-run` 才会回立方体。生产输入额外限制为：上传文件 ≤20MB、解码后 ≤4000 万像素、`texture_size` 只能是 `256/512/1024`；Web live 队列一次最多 20 张，避免单次误操作长时间占住唯一 GPU。
+生产 GPU 固定为 **A100-80GB**，最多 **1 个 GPU container**；连续请求排队并优先复用同一个 warm container，不会因为突发提交横向扩成多张 GPU。A100 使用 **FlashAttention 2**，不强制使用面向 Hopper 的 FA3。  
+只有勾上 dry-run / 传 `--dry-run` 才会回立方体。生产输入限制为：上传文件 ≤20MB、解码后 ≤4000 万像素、进入远程处理前最长边缩到 ≤1024、`texture_size` 只能是 `256/512/1024`；GLB RPC 返回设置 90MB 安全上限；Web live 队列一次最多 20 张。
 
 ## 成本策略
 
 ```text
 Hugging Face
     ↓
-CPU prefetch → Modal Volume
+CPU prefetch + 完整性校验 → Modal Volume
+                  ↓
+        CPU preflight（ok=true?）
                   ↓
 RGB 上传 → CPU rembg（可 warm 5 分钟）
                   ↓
@@ -107,9 +110,9 @@ uv run modal secret create --force huggingface-secret \
 - [microsoft/TRELLIS.2-4B](https://huggingface.co/microsoft/TRELLIS.2-4B)（权重本身公开）
 - [facebook/dinov3-vitl16-pretrain-lvd1689m](https://huggingface.co/facebook/dinov3-vitl16-pretrain-lvd1689m)（官方图像编码器，gated）
 
-GPU 镜像中的官方 TRELLIS.2 源码固定到 commit `75fbf0183001ed9876c8dbb35de6b68552ee08bd`，避免未来重新 build 时随上游 `main` 漂移。
+生产端同时固定两层版本：TRELLIS.2 源码 commit `75fbf0183001ed9876c8dbb35de6b68552ee08bd`，主模型 Hugging Face revision `af44b45f2e35a493886929c6d786e563ec68364d`。这样重新 build / prefetch 时不会一边固定源码、一边让 `pipeline.json` 随 HF HEAD 漂移。
 
-首次顺序固定为：`uv run modal-trellis2 prefetch`（临时 CPU App）→ `uv run modal-trellis2 prefetch --status` → `uv run modal-trellis2 deploy`。`uv run modal-trellis2 health` 默认仍只查 CPU Volume；只有 `uv run modal-trellis2 health --gpu` 才会启动 A100。prefetch 还会写 `/models/manifest.json`，记录模型 revision / readiness，供 GPU health 和生成 telemetry 对照。
+首次顺序固定为：`uv run modal-trellis2 prefetch`（临时 CPU App）→ `uv run modal-trellis2 prefetch --status`（必须 `ok=true`）→ `uv run modal-trellis2 deploy`。`uv run modal-trellis2 health` 默认仍只查 CPU Volume；只有 `uv run modal-trellis2 health --gpu` 才会启动 A100。prefetch 还会写 `/models/manifest.json`，记录模型 revision / readiness，供 GPU health 和生成 telemetry 对照。
 
 ## 本地对照上游
 

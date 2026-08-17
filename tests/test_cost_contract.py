@@ -37,6 +37,8 @@ def test_prefetch_readiness_requires_background_model() -> None:
     source = Path("src/modal_trellis2/modal/prefetch.py").read_text(encoding="utf-8")
     assert "(rembg_ok or birefnet_ok)" in source
     assert 'Path(MODEL_DIR) / "manifest.json"' in source
+    assert "inspect_trellis_bundle" in source
+    assert "inspect_hf_model_dir" in source
 
 
 def test_core_package_does_not_import_modal_layer() -> None:
@@ -60,13 +62,23 @@ def test_gpu_worker_revalidates_texture_size() -> None:
     assert "_require_production_request" in worker
 
 
-def test_trellis_source_revision_is_pinned() -> None:
+def test_trellis_source_and_primary_model_revisions_are_pinned() -> None:
     image = Path("src/modal_trellis2/modal/image.py").read_text(encoding="utf-8")
     weights = Path("src/modal_trellis2/modal/weights.py").read_text(encoding="utf-8")
+    prefetch = Path("src/modal_trellis2/modal/prefetch.py").read_text(encoding="utf-8")
 
     assert 'TRELLIS2_SOURCE_REVISION = "75fbf0183001ed9876c8dbb35de6b68552ee08bd"' in weights
+    assert 'TRELLIS2_MODEL_REVISION = "af44b45f2e35a493886929c6d786e563ec68364d"' in weights
     assert "git checkout --detach {TRELLIS2_SOURCE_REVISION}" in image
+    assert "revision=TRELLIS2_MODEL_REVISION" in prefetch
     assert "git clone --depth 1" not in image
+
+
+def test_production_preserves_runtime_validated_flash_attention_backend() -> None:
+    image = Path("src/modal_trellis2/modal/image.py").read_text(encoding="utf-8")
+    assert "flash_attn_3-3.0.0b1" in image
+    assert '"ATTN_BACKEND": "flash_attn_3"' in image
+    assert '"SPARSE_ATTN_BACKEND": "flash_attn_3"' in image
 
 
 def test_trellis_import_never_runs_in_cpu_memory_snapshot() -> None:
@@ -76,3 +88,46 @@ def test_trellis_import_never_runs_in_cpu_memory_snapshot() -> None:
     assert "@modal.enter()" in worker
     assert 'if not torch.cuda.is_available()' in worker
     assert "from trellis2.pipelines import Trellis2ImageTo3DPipeline" in worker
+
+
+def test_gpu_worker_never_late_loads_missing_models() -> None:
+    worker = Path("src/modal_trellis2/modal/worker.py").read_text(encoding="utf-8")
+    assert "_ensure_models" not in worker
+    assert "from trellis2 import models" not in worker
+    assert "_require_loaded_models" in worker
+
+
+def test_large_glb_uses_volume_not_function_return_blob() -> None:
+    volumes = Path("src/modal_trellis2/modal/volumes.py").read_text(encoding="utf-8")
+    worker = Path("src/modal_trellis2/modal/worker.py").read_text(encoding="utf-8")
+    generator = Path("src/modal_trellis2/modal/generator.py").read_text(encoding="utf-8")
+
+    assert 'OUTPUT_VOLUME_NAME = "modal-trellis2-results"' in volumes
+    assert "OUTPUT_DIR: output_volume" in worker
+    assert "output_volume.commit()" in worker
+    assert '"output_path": relative_output' in worker
+    assert '"glb_bytes": payload' not in worker
+    assert "output_volume.read_file(output_path)" in generator
+    assert "output_volume.remove_file(output_path)" in generator
+
+
+def test_live_generation_runs_cpu_bundle_preflight_before_gpu_lookup() -> None:
+    generator = Path("src/modal_trellis2/modal/generator.py").read_text(encoding="utf-8")
+    preflight = generator.index('modal.Function.from_name(APP_NAME, "prefetch_status")')
+    gpu_lookup = generator.index('modal.Cls.from_name(APP_NAME, "Trellis2Worker")')
+    assert preflight < gpu_lookup
+    assert "CPU preflight failed before GPU launch" in generator
+
+
+def test_catchable_gpu_init_errors_do_not_escape_enter_hook() -> None:
+    worker = Path("src/modal_trellis2/modal/worker.py").read_text(encoding="utf-8")
+    assert "self.init_error = None" in worker
+    assert "self.init_error = f\"{type(exc).__name__}: {exc}\"" in worker
+    assert "GPU initialization failed: {self.init_error}" in worker
+
+
+def test_gpu_method_returns_portable_error_metadata() -> None:
+    worker = Path("src/modal_trellis2/modal/worker.py").read_text(encoding="utf-8")
+    assert '"ok": False' in worker
+    assert '"error_type": type(exc).__name__' in worker
+    assert '"error": str(exc)' in worker

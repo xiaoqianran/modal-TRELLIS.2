@@ -35,9 +35,11 @@ Normal implementation, refactoring, tests, documentation, and local debugging **
 - Never add `Cls.with_options(gpu=...)`, request/env GPU selectors, `@modal.concurrent`, fallback GPU lists, or additional production GPU pools.
 - Do not automatically invoke `modal-gpu-dev`, `modal-gpu-experiment`, `sub-agents`, or `modal_trellis2.modal.gpu_smoke`. Those are explicit experiment tools and can create additional billable GPUs.
 - CPU `prefetch`, CPU `prefetch --status`, local `doctor`, dry-run, pytest, and CI are the default validation path.
+- Live generation must run deployed CPU `prefetch_status` before looking up `Trellis2Worker`; an incomplete Volume must never be discovered after A100 launch.
 - Production currently accepts only `pipeline=512`. Higher-resolution pipelines remain experimental until separately GPU-validated.
-- Keep upstream TRELLIS.2 source pinned to `75fbf0183001ed9876c8dbb35de6b68552ee08bd`; do not float on `main` in production images.
-- Keep input-cost guards: upload <=20MB, decoded image <=40MP, production `texture_size` in `{256, 512, 1024}`, and Web live batch <=20 images. Do not relax them without explicit user approval.
+- Keep TRELLIS.2 source pinned to `75fbf0183001ed9876c8dbb35de6b68552ee08bd` and the primary HF model bundle pinned to `af44b45f2e35a493886929c6d786e563ec68364d`.
+- Production A100 uses FlashAttention 2 (`flash_attn`), currently the torch-2.6/CUDA-12 v2.7.3 wheel. Do not force `flash_attn_3` into the fixed A100 image.
+- Keep input-cost guards: upload <=20MB, decoded image <=40MP, normalize longest side <=1024 before remote calls, production `texture_size` in `{256, 512, 1024}`, GLB RPC payload <90MB, and Web live batch <=20 images.
 
 ## Architecture
 
@@ -46,18 +48,20 @@ Local CLI/Web own jobs and the GLB workbench. Modal owns GPU inference.
 - Contract: image bytes → `ImageTo3DGenerator` → GLB bytes
 - Default path is official `microsoft/TRELLIS.2-4B` via `ModalTrellis2Generator`
 - `--dry-run` / `MockGenerator` is opt-in for the upload/download loop
-- Weights: `modal-trellis2 prefetch` (CPU image only) writes `/models/trellis2` plus HF cache copies of DINOv3 / BiRefNet, then `commit()`s. GPU is `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`, `block_network=True`, and has no HF secret.
-- RGB uploads: `CpuPreprocessor` runs BiRefNet on CPU. Images that already have alpha are cropped locally.
-- GPU `Trellis2Worker` deliberately does **not** use CPU Memory Snapshots: TRELLIS.2 imports `flex_gemm`/Triton at pipeline import time, and Modal CPU snapshot hooks have no GPU driver. The regular GPU `@modal.enter()` loads the already-prefetched local pipeline, then `.cuda()` + `run` + official `to_glb`.
+- Weights: `uv run modal-trellis2 prefetch` is CPU-only, writes `/models/trellis2` plus DINOv3/background-removal bundles, validates all six 512 checkpoint config+weight pairs, then commits the Volume.
+- GPU is `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`, `block_network=True`, and has no HF secret.
+- RGB uploads are bounded to 1024px before `CpuPreprocessor`; alpha uploads are cropped locally. Background removal tries a complete RMBG bundle first, then a complete BiRefNet bundle.
+- GPU `Trellis2Worker` deliberately does **not** use CPU Memory Snapshots: TRELLIS.2 imports `flex_gemm`/Triton at pipeline import time, and Modal CPU snapshot hooks have no GPU driver.
+- Catchable Python exceptions during GPU initialization are stored as `init_error` instead of escaping `@modal.enter()`. `health/generate` then report a normal method failure so Python-level startup errors do not become deployed-container crash loops.
+- The GPU worker never late-loads a missing model after `.cuda()`. Missing production models are a hard preflight/init error.
 - Production GPU policy is cost-first: fixed `A100-80GB`, `min_containers=0`, `max_containers=1`, `buffer_containers=0`, `scaledown_window=10`. Bursty jobs queue onto the one warm GPU container instead of scaling out.
 - Production generation must not use `Cls.with_options(gpu=...)`; dynamic GPU variants create separate autoscaling pools and can bypass the one-container cost cap. Benchmark/experimentation with other GPU types belongs in a separate path.
 - Live GPU needs gated `facebook/dinov3-vitl16-pretrain-lvd1689m` accepted on the HF account behind `HF_TOKEN` **before prefetch**. After that the GPU never talks to Hugging Face.
-- Do **not** `modal run -m modal_trellis2.modal.worker` just to prefetch — that file registers `Trellis2Worker` and builds CUDA
-- Deploy: `modal-trellis2 deploy` or `modal deploy -m modal_trellis2.modal.deploy`
-- Probe: `modal-trellis2 health` (CPU Volume). `health --gpu` starts an A100.
-- Live reuse acceptance: `modal-trellis2 verify-gpu-reuse ... --confirm-cost` only when the user explicitly requests a billable GPU test.
-- Smoke: `modal run -m modal_trellis2.modal.smoke` (secret) / `modal run -m modal_trellis2.modal.gpu_smoke` (CUDA image + A100)
-- Local web/CLI are **not** `modal serve`
+- Do **not** `modal run -m modal_trellis2.modal.worker` just to prefetch — that file registers `Trellis2Worker` and builds CUDA.
+- Deploy: `uv run modal-trellis2 deploy`.
+- Probe: `uv run modal-trellis2 health` is CPU-only. `uv run modal-trellis2 health --gpu` starts an A100.
+- Live reuse acceptance: `uv run modal-trellis2 verify-gpu-reuse ... --confirm-cost` only when the user explicitly requests a billable GPU test.
+- Local web/CLI are **not** `modal serve`.
 
 The production prefetch secret `huggingface-secret` needs only `HF_TOKEN`. Do not mount unrelated GitHub/CivitAI credentials into this app. Never commit tokens.
 

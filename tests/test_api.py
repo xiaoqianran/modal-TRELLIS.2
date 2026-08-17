@@ -37,3 +37,13 @@ def test_generate_rejects_text(client) -> None:
         data={"dry_run": "true"},
     )
     assert response.status_code == 400
+
+
+def test_generate_rejects_oversized_upload_before_decode(client, monkeypatch) -> None:
+    monkeypatch.setattr("modal_trellis2.web.api.MAX_IMAGE_BYTES", 8)
+    response = client.post(
+        "/api/generate",
+        files={"image": ("big.png", b"x" * 9, "image/png")},
+        data={"dry_run": "true"},
+    )
+    assert response.status_code == 413

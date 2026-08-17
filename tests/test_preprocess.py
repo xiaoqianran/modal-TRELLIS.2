@@ -1,3 +1,4 @@
+from io import BytesIO
 from pathlib import Path
 
 from PIL import Image
@@ -9,6 +10,17 @@ def test_rgb_needs_cpu_rembg(sample_png: Path) -> None:
     png, needs_rembg = prepare_image(sample_png.read_bytes())
     assert needs_rembg is True
     assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_large_rgb_is_resized_before_remote_rembg() -> None:
+    image = Image.new("RGB", (6000, 4000), (80, 120, 160))
+    source = BytesIO()
+    image.save(source, format="JPEG", quality=70)
+    png, needs_rembg = prepare_image(source.getvalue())
+    assert needs_rembg is True
+    with Image.open(BytesIO(png)) as prepared:
+        assert max(prepared.size) <= 1024
+    assert len(png) < 20 * 1024 * 1024
 
 
 def test_alpha_is_cropped_locally(tmp_path: Path) -> None:
@@ -34,4 +46,3 @@ def test_crop_composites_on_black() -> None:
     out = crop_to_foreground(image)
     assert out.mode == "RGB"
     assert out.getpixel((out.size[0] // 2, out.size[1] // 2))[0] > 0
-
