@@ -28,7 +28,9 @@ class ModalTrellis2Generator:
             preflight_fn = modal.Function.from_name(APP_NAME, "prefetch_status")
             preflight = preflight_fn.remote()
             if not isinstance(preflight, dict):
-                raise TypeError(f"prefetch_status returned {type(preflight).__name__}, expected dict")
+                raise TypeError(
+                    f"prefetch_status returned {type(preflight).__name__}, expected dict"
+                )
             if not preflight.get("ok"):
                 raise RuntimeError(f"offline model bundle is not ready: {preflight}")
         except Exception as exc:  # noqa: BLE001
