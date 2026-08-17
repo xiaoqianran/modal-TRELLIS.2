@@ -32,13 +32,13 @@ ImageTo3DGenerator
             ↓
         prefetch.py        CPU：HF 下载 4B + DINOv3 + BiRefNet → Volume
         CpuPreprocessor    CPU：BiRefNet 抠图（上传已有 alpha 则本地做）
-        Trellis2Worker     GPU：内存快照恢复 → .cuda() → run → to_glb
+        Trellis2Worker     GPU：本地 Volume 构造 pipeline → .cuda() → run → to_glb
                            固定 A100-80GB，最多 1 个 container
                            scaledown_window=10，HF offline，不下载
 ```
 
-GPU 只做两件事：把已经在 CPU 里的权重量到显存，以及官方推理 / `to_glb`（nvdiffrast 必须 CUDA）。  
-下载、Volume 写入、抠图、crop 都不准占 GPU。prefetch 写 `/models/manifest.json` 记录 revision/readiness；GPU 只读取它用于 health/telemetry，并设置 `block_network=True` 完全禁止运行时外网。空闲 10 秒释放 A100。
+GPU 负责从已经预取好的本地 Volume 构造 TRELLIS pipeline、移动到显存，以及官方推理 / `to_glb`（nvdiffrast 必须 CUDA）。TRELLIS.2 的 pipeline import 会初始化 `flex_gemm`/Triton，因此不能放进 Modal 的 CPU Memory Snapshot：普通 `snap=True` 阶段没有 GPU driver。  
+下载、Volume 写入、抠图、crop 仍然都不准占 GPU；只有本地权重反序列化与推理发生在 GPU container 生命周期内。prefetch 写 `/models/manifest.json` 记录 revision/readiness；GPU 只读取它用于 health/telemetry，并设置 `block_network=True` 完全禁止运行时外网。空闲 10 秒释放 A100。
 
 生产 GPU 策略明确为：`min_containers=0`、`max_containers=1`、`buffer_containers=0`、`timeout=10min`、固定 `A100-80GB`。Web 多图使用客户端串行队列，上一任务完成后立即提交下一任务，主动提高同一 warm container 的复用概率；live 队列一次最多 20 张。输入层同时限制上传 ≤20MB、解码后 ≤40MP、`texture_size` ∈ `{256,512,1024}`。突发提交不会横向扩成多张 GPU，而是排队复用同一个 warm container。普通生成路径禁止 `with_options(gpu=...)`，因为不同动态 GPU 配置会形成独立 autoscaling pool；其他 GPU 型号只允许走独立 benchmark/实验入口。
 
