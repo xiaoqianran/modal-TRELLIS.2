@@ -37,6 +37,8 @@ def test_prefetch_readiness_requires_background_model() -> None:
     source = Path("src/modal_trellis2/modal/prefetch.py").read_text(encoding="utf-8")
     assert "(rembg_ok or birefnet_ok)" in source
     assert 'Path(MODEL_DIR) / "manifest.json"' in source
+    assert "inspect_trellis_bundle" in source
+    assert "inspect_hf_model_dir" in source
 
 
 def test_core_package_does_not_import_modal_layer() -> None:
@@ -60,13 +62,24 @@ def test_gpu_worker_revalidates_texture_size() -> None:
     assert "_require_production_request" in worker
 
 
-def test_trellis_source_revision_is_pinned() -> None:
+def test_trellis_source_and_primary_model_revisions_are_pinned() -> None:
     image = Path("src/modal_trellis2/modal/image.py").read_text(encoding="utf-8")
     weights = Path("src/modal_trellis2/modal/weights.py").read_text(encoding="utf-8")
+    prefetch = Path("src/modal_trellis2/modal/prefetch.py").read_text(encoding="utf-8")
 
     assert 'TRELLIS2_SOURCE_REVISION = "75fbf0183001ed9876c8dbb35de6b68552ee08bd"' in weights
+    assert 'TRELLIS2_MODEL_REVISION = "af44b45f2e35a493886929c6d786e563ec68364d"' in weights
     assert "git checkout --detach {TRELLIS2_SOURCE_REVISION}" in image
+    assert "revision=TRELLIS2_MODEL_REVISION" in prefetch
     assert "git clone --depth 1" not in image
+
+
+def test_a100_production_uses_flash_attention_2_not_fa3() -> None:
+    image = Path("src/modal_trellis2/modal/image.py").read_text(encoding="utf-8")
+    assert "flash_attn-2.7.3+cu12torch2.6" in image
+    assert '"ATTN_BACKEND": "flash_attn"' in image
+    assert '"SPARSE_ATTN_BACKEND": "flash_attn"' in image
+    assert "flash_attn_3" not in image
 
 
 def test_trellis_import_never_runs_in_cpu_memory_snapshot() -> None:
@@ -76,3 +89,17 @@ def test_trellis_import_never_runs_in_cpu_memory_snapshot() -> None:
     assert "@modal.enter()" in worker
     assert 'if not torch.cuda.is_available()' in worker
     assert "from trellis2.pipelines import Trellis2ImageTo3DPipeline" in worker
+
+
+def test_gpu_worker_never_late_loads_missing_models() -> None:
+    worker = Path("src/modal_trellis2/modal/worker.py").read_text(encoding="utf-8")
+    assert "_ensure_models" not in worker
+    assert "from trellis2 import models" not in worker
+    assert "_require_loaded_models" in worker
+
+
+def test_generated_glb_has_rpc_safety_guard() -> None:
+    weights = Path("src/modal_trellis2/modal/weights.py").read_text(encoding="utf-8")
+    worker = Path("src/modal_trellis2/modal/worker.py").read_text(encoding="utf-8")
+    assert "MAX_MODAL_RESULT_BYTES = 90 * 1024 * 1024" in weights
+    assert "len(payload) > MAX_MODAL_RESULT_BYTES" in worker
