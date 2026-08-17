@@ -24,10 +24,6 @@ GPU_BUFFER_CONTAINERS = 0
 PRODUCTION_PIPELINES: tuple[str, ...] = ("512",)
 PRODUCTION_TEXTURE_SIZES: tuple[int, ...] = (256, 512, 1024)
 
-# Modal's RPC transport has a finite payload ceiling. Keep a margin so a large
-# generated GLB fails with a readable worker error rather than a transport error.
-MAX_MODAL_RESULT_BYTES = 90 * 1024 * 1024
-
 # Production currently loads only the validated 512 model set.
 MODELS_512: tuple[str, ...] = (
     "sparse_structure_flow_model",
