@@ -49,8 +49,10 @@ class ModalTrellis2Generator:
             rembg_ms = (time.perf_counter() - rembg_started) * 1000
 
         try:
-            cls = modal.Cls.from_name(APP_NAME, "Trellis2Worker")
-            worker = cls.with_options(gpu=request.gpu)()
+            # Production deliberately uses the deployed class configuration as-is.
+            # Do not call `with_options(gpu=...)` here: every dynamic GPU option
+            # creates its own autoscaling pool and can bypass the one-container cap.
+            worker = modal.Cls.from_name(APP_NAME, "Trellis2Worker")()
             payload = worker.generate.remote(
                 image_bytes,
                 seed=request.seed,
@@ -82,7 +84,8 @@ class ModalTrellis2Generator:
                 "pipeline": payload.get("pipeline", request.pipeline),
                 "seed": payload.get("seed", request.seed),
                 "size_bytes": payload.get("size_bytes"),
-                "gpu": request.gpu,
+                "gpu": "A100-80GB",
+                "gpu_policy": "fixed-production-pool",
                 "offline": payload.get("offline", True),
                 "scaledown_window": payload.get("scaledown_window"),
                 "timings": timings,
