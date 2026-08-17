@@ -13,18 +13,18 @@ CLI 和 Web 共用 `GenerateService`。拆法和 [modal-sana](https://github.com
 ## 现在就能跑
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
+uv sync
 cp .env.example .env
 
-modal-trellis2 doctor
-modal-trellis2 prefetch          # CPU 下载官方 4B + DINOv3 + BiRefNet → Volume
-modal-trellis2 deploy            # 注册 CPU 抠图 + GPU worker（modal_trellis2.modal.deploy）
-modal-trellis2 health            # 只查 Volume，不点 GPU
-modal-trellis2 generate path/to/photo.png -o /tmp/mesh.glb
-modal-trellis2 web
+uv run modal-trellis2 doctor
+uv run modal-trellis2 prefetch          # CPU 下载官方 4B + DINOv3 + BiRefNet → Volume
+uv run modal-trellis2 deploy            # 注册 CPU 抠图 + GPU worker（modal_trellis2.modal.deploy）
+uv run modal-trellis2 health            # 只查 Volume，不点 GPU
+uv run modal-trellis2 generate path/to/photo.png -o /tmp/mesh.glb
+uv run modal-trellis2 web
 ```
+
+`uv sync` 会默认安装项目依赖，包括 `modal[api-proxy-support]`，适合本地需要代理访问 Modal API 的环境。
 
 打开 http://127.0.0.1:7863 。默认 **官方 TRELLIS.2-4B**，当前生产合同只开放 `pipeline=512`。  
 权重只在 CPU prefetch 下载。GPU 离线加载 Volume，空闲 **10 秒**释放。  
@@ -66,10 +66,10 @@ job1 完成 → 立即 job2 → 立即 job3 → ...
 
 ```bash
 # 会真实启动并计费 GPU；没有 --confirm-cost 时命令会拒绝执行
-modal-trellis2 verify-gpu-reuse image.png --count 3 --confirm-cost
+uv run modal-trellis2 verify-gpu-reuse image.png --count 3 --confirm-cost
 
 # 额外等待 15 秒，再做一次冷启动探针，验证 scale-to-zero 后 container id 已变化
-modal-trellis2 verify-gpu-reuse image.png --count 3 --check-scale-down --confirm-cost
+uv run modal-trellis2 verify-gpu-reuse image.png --count 3 --check-scale-down --confirm-cost
 ```
 
 普通 pytest / CI 永远不会执行这个 live probe。Web live 多图一次最多 20 张；如果要处理更多，分批提交即可，避免浏览器一次排入过长的付费队列。
@@ -97,8 +97,8 @@ image=<file>&pipeline=512&seed=42&dry_run=false
 ## 凭证（不要写进 git）
 
 ```bash
-modal token set --token-id "$MODAL_TOKEN_ID" --token-secret "$MODAL_TOKEN_SECRET"
-modal secret create --force huggingface-secret \
+uv run modal token set --token-id "$MODAL_TOKEN_ID" --token-secret "$MODAL_TOKEN_SECRET"
+uv run modal secret create --force huggingface-secret \
   HF_TOKEN="$HF_TOKEN"
 ```
 
@@ -109,7 +109,7 @@ modal secret create --force huggingface-secret \
 
 GPU 镜像中的官方 TRELLIS.2 源码固定到 commit `75fbf0183001ed9876c8dbb35de6b68552ee08bd`，避免未来重新 build 时随上游 `main` 漂移。
 
-首次顺序固定为：`modal-trellis2 prefetch`（临时 CPU App）→ `modal-trellis2 prefetch --status` → `modal-trellis2 deploy`。`modal-trellis2 health` 默认仍只查 CPU Volume；只有 `health --gpu` 才会启动 A100。prefetch 还会写 `/models/manifest.json`，记录模型 revision / readiness，供 GPU health 和生成 telemetry 对照。
+首次顺序固定为：`uv run modal-trellis2 prefetch`（临时 CPU App）→ `uv run modal-trellis2 prefetch --status` → `uv run modal-trellis2 deploy`。`uv run modal-trellis2 health` 默认仍只查 CPU Volume；只有 `uv run modal-trellis2 health --gpu` 才会启动 A100。prefetch 还会写 `/models/manifest.json`，记录模型 revision / readiness，供 GPU health 和生成 telemetry 对照。
 
 ## 本地对照上游
 
@@ -125,7 +125,7 @@ GPU 镜像中的官方 TRELLIS.2 源码固定到 commit `75fbf0183001ed9876c8dbb
 完整的零 GPU / 显式付费验收清单见 [`docs/VALIDATION.md`](docs/VALIDATION.md)。
 
 ```bash
-python -m compileall -q src tests
-pytest
-# CI 还会执行：ruff check src tests + import smoke
+uv run python -m compileall -q src tests
+uv run pytest
+uv run ruff check src tests
 ```
