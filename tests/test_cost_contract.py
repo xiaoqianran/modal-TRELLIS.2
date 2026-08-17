@@ -111,6 +111,21 @@ def test_large_glb_uses_volume_not_function_return_blob() -> None:
     assert "output_volume.remove_file(output_path)" in generator
 
 
+def test_gpu_vram_is_recorded_for_load_infer_export_and_cleanup() -> None:
+    worker = Path("src/modal_trellis2/modal/worker.py").read_text(encoding="utf-8")
+    generator = Path("src/modal_trellis2/modal/generator.py").read_text(encoding="utf-8")
+
+    assert "self.vram_after_load = self._vram_stats()" in worker
+    assert "torch.cuda.reset_peak_memory_stats()" in worker
+    assert "torch.cuda.max_memory_allocated()" in worker
+    assert "torch.cuda.max_memory_reserved()" in worker
+    assert '"before_infer": vram_before_infer' in worker
+    assert '"after_infer": vram_after_infer' in worker
+    assert '"after_export": vram_after_export' in worker
+    assert '"after_cleanup": vram_after_cleanup' in worker
+    assert '"vram": payload.get("vram")' in generator
+
+
 def test_live_generation_runs_cpu_bundle_preflight_before_gpu_lookup() -> None:
     generator = Path("src/modal_trellis2/modal/generator.py").read_text(encoding="utf-8")
     preflight = generator.index('modal.Function.from_name(APP_NAME, "prefetch_status")')
