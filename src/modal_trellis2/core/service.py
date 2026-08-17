@@ -10,13 +10,13 @@ from modal_trellis2.core.config import (
     Settings,
 )
 from modal_trellis2.core.generator import GenerateRequest, ImageTo3DGenerator
-from modal_trellis2.core.glb import GlbError, validate_glb
+from modal_trellis2.core.glb import validate_glb
 from modal_trellis2.core.image import encode_png, load_image
 from modal_trellis2.core.jobs import Job, JobStore
 
 
 class GenerateService:
-    """Product contract: validated image bytes in, persisted GLB job out."""
+    """Product contract: validated, bounded image bytes in; persisted GLB job out."""
 
     def __init__(
         self,
@@ -56,7 +56,8 @@ class GenerateService:
         if not MIN_SEED <= selected_seed <= MAX_SEED:
             raise ValueError(f"seed must be between {MIN_SEED} and {MAX_SEED}")
 
-        # Input errors are caller errors, not failed remote jobs. Validate before creating a Job.
+        # Caller errors are rejected before a Job exists. Normalization also caps the
+        # longest side at 1024 so a compressed upload cannot expand into a huge PNG RPC.
         image = load_image(image_bytes)
         png = encode_png(image)
 
@@ -85,7 +86,9 @@ class GenerateService:
             if not result.glb_bytes:
                 raise RuntimeError("generator returned no GLB")
             validate_glb(result.glb_bytes)
-        except (GlbError, RuntimeError, ValueError) as exc:
+            job.glb_filename = result.filename
+            self.store.save_glb(job, result.glb_bytes)
+        except Exception as exc:  # noqa: BLE001 - every runtime failure must close the Job
             return self.store.mark(
                 job,
                 "failed",
@@ -94,8 +97,6 @@ class GenerateService:
                 telemetry=result.telemetry if result is not None else {},
             )
 
-        job.glb_filename = result.filename
-        self.store.save_glb(job, result.glb_bytes)
         return self.store.mark(
             job,
             "completed",
