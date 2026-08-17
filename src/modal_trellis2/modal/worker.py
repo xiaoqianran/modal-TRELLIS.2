@@ -69,6 +69,9 @@ def _require_local_weights() -> str:
     image=trellis2_image,
     volumes={MODEL_DIR: model_volume},
     timeout=30 * 60,
+    min_containers=0,
+    max_containers=1,
+    buffer_containers=0,
     scaledown_window=GPU_SCALEDOWN_SECONDS,
     retries=0,
     enable_memory_snapshot=True,
@@ -80,7 +83,12 @@ def _require_local_weights() -> str:
     },
 )
 class Trellis2Worker:
-    """Official TRELLIS.2. CPU snapshot loads weights; GPU only does .cuda() + run."""
+    """Official TRELLIS.2. CPU snapshot loads weights; GPU only does .cuda() + run.
+
+    Cost policy: this production worker has exactly one GPU container at a time.
+    Bursty requests queue onto that container instead of scaling out to more GPUs.
+    When the queue drains, the container scales to zero after the short idle window.
+    """
 
     @modal.enter(snap=True)
     def load_cpu(self) -> None:
@@ -129,6 +137,9 @@ class Trellis2Worker:
             "low_vram": self.pipeline.low_vram,
             "vram_gb": round(torch.cuda.get_device_properties(0).total_memory / 2**30, 1),
             "scaledown_window": GPU_SCALEDOWN_SECONDS,
+            "min_containers": 0,
+            "max_containers": 1,
+            "buffer_containers": 0,
             "repo": TRELLIS2_REPO,
         }
 
