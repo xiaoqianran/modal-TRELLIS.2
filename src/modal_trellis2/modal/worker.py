@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +12,12 @@ import modal
 from modal_trellis2.modal.app import app
 from modal_trellis2.modal.image import trellis2_image
 from modal_trellis2.modal.model_bundle import require_hf_model_dir, require_trellis_bundle
-from modal_trellis2.modal.volumes import MODEL_DIR, model_volume
+from modal_trellis2.modal.volumes import (
+    MODEL_DIR,
+    OUTPUT_DIR,
+    model_volume,
+    output_volume,
+)
 from modal_trellis2.modal.weights import (
     DINOV3_LOCAL,
     GPU_BUFFER_CONTAINERS,
@@ -19,7 +25,6 @@ from modal_trellis2.modal.weights import (
     GPU_MIN_CONTAINERS,
     GPU_SCALEDOWN_SECONDS,
     GPU_TIMEOUT_SECONDS,
-    MAX_MODAL_RESULT_BYTES,
     MODELS_512,
     PRODUCTION_GPU,
     PRODUCTION_PIPELINES,
@@ -31,6 +36,7 @@ from modal_trellis2.modal.weights import (
 
 # GPU is offline. Weights come from the CPU Volume. Do not import this
 # module from prefetch.py — `modal run -m prefetch` must stay CPU-only.
+_JOB_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
 
 
 def _offline_env() -> None:
@@ -71,10 +77,16 @@ def _require_local_weights() -> tuple[str, dict[str, Any]]:
     return str(weights), bundle
 
 
+def _output_relative_path(job_id: str) -> str:
+    if not _JOB_ID_RE.fullmatch(job_id):
+        raise ValueError("invalid job_id for output path")
+    return f"jobs/{job_id}/mesh.glb"
+
+
 @app.cls(
     gpu=PRODUCTION_GPU,
     image=trellis2_image,
-    volumes={MODEL_DIR: model_volume},
+    volumes={MODEL_DIR: model_volume, OUTPUT_DIR: output_volume},
     timeout=GPU_TIMEOUT_SECONDS,
     min_containers=GPU_MIN_CONTAINERS,
     max_containers=GPU_MAX_CONTAINERS,
@@ -98,10 +110,14 @@ class Trellis2Worker:
     disabled here and initialize the local, prefetched pipeline in the regular
     GPU lifecycle hook instead.
 
+    The GPU keeps outbound networking blocked. Large GLB outputs are therefore
+    written to a Modal Volume and only a small metadata dict is returned. Modal
+    routes Function outputs larger than 2 MiB through object storage, which is
+    incompatible with a fully network-blocked container.
+
     Catchable Python initialization failures are stored as ``init_error`` instead
-    of escaping this lifecycle hook. This keeps a bad preflight/import/model load
-    from turning into a deployed-container crash loop; methods then fail once with
-    the actual initialization error and the container can scale down normally.
+    of escaping this lifecycle hook. Methods then return a readable error instead
+    of turning a bad model import/load into a deployed-container crash loop.
     """
 
     @modal.enter()
@@ -179,6 +195,7 @@ class Trellis2Worker:
             "source": self.weights_source,
             "offline": os.environ.get("HF_HUB_OFFLINE") == "1",
             "network_blocked": True,
+            "output_transport": "modal-volume",
             "low_vram": getattr(self.pipeline, "low_vram", None),
             "vram_gb": round(torch.cuda.get_device_properties(0).total_memory / 2**30, 1)
             if cuda
@@ -238,20 +255,59 @@ class Trellis2Worker:
     def generate(
         self,
         image_bytes: bytes,
+        job_id: str,
         seed: int = 42,
         pipeline_type: str = "512",
         texture_size: int = 1024,
         remesh: bool = True,
         decimation_target: int | None = None,
     ) -> dict[str, Any]:
+        """Generate one GLB and return only small metadata safe under block_network."""
         import time
 
+        started = time.perf_counter()
+        try:
+            return self._generate_impl(
+                image_bytes=image_bytes,
+                job_id=job_id,
+                seed=seed,
+                pipeline_type=pipeline_type,
+                texture_size=texture_size,
+                remesh=remesh,
+                decimation_target=decimation_target,
+                started=started,
+            )
+        except Exception as exc:  # noqa: BLE001 - keep remote error payload portable/small
+            return {
+                "ok": False,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+                "latency_ms": (time.perf_counter() - started) * 1000,
+                "container_instance_id": self.container_instance_id,
+            }
+
+    def _generate_impl(
+        self,
+        *,
+        image_bytes: bytes,
+        job_id: str,
+        seed: int,
+        pipeline_type: str,
+        texture_size: int,
+        remesh: bool,
+        decimation_target: int | None,
+        started: float,
+    ) -> dict[str, Any]:
+        import time
+
+        import torch
         from PIL import Image
 
-        started = time.perf_counter()
         self._require_ready()
         self._require_production_request(pipeline_type, texture_size)
+        relative_output = _output_relative_path(job_id)
         image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+
         infer_started = time.perf_counter()
         mesh = self.pipeline.run(
             image,
@@ -261,6 +317,7 @@ class Trellis2Worker:
         )[0]
         infer_ms = (time.perf_counter() - infer_started) * 1000
         mesh.simplify(16_777_216)
+
         export_started = time.perf_counter()
         target = decimation_target or 500_000
         glb = self.o_voxel.postprocess.to_glb(
@@ -281,19 +338,28 @@ class Trellis2Worker:
         buffer = io.BytesIO()
         glb.export(buffer, file_type="glb")
         payload = buffer.getvalue()
-        if len(payload) > MAX_MODAL_RESULT_BYTES:
-            raise RuntimeError(
-                "Generated GLB exceeds the Modal RPC safety limit "
-                f"({len(payload)} > {MAX_MODAL_RESULT_BYTES} bytes). "
-                "Reduce texture_size or decimation target."
-            )
+        payload_size = len(payload)
         export_ms = (time.perf_counter() - export_started) * 1000
+
+        persist_started = time.perf_counter()
+        output_path = Path(OUTPUT_DIR) / relative_output
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = output_path.with_suffix(".glb.tmp")
+        tmp_path.write_bytes(payload)
+        os.replace(tmp_path, output_path)
+        output_volume.commit()
+        persist_ms = (time.perf_counter() - persist_started) * 1000
+
+        del mesh, glb, buffer, payload
+        torch.cuda.empty_cache()
+
         return {
-            "glb_bytes": payload,
+            "ok": True,
+            "output_path": relative_output,
             "latency_ms": (time.perf_counter() - started) * 1000,
             "pipeline": pipeline_type,
             "seed": seed,
-            "size_bytes": len(payload),
+            "size_bytes": payload_size,
             "decimation_target": target,
             "texture_size": texture_size,
             "remesh": remesh,
@@ -302,12 +368,14 @@ class Trellis2Worker:
             "model_revision": TRELLIS2_MODEL_REVISION,
             "offline": True,
             "network_blocked": True,
+            "output_transport": "modal-volume",
             "scaledown_window": GPU_SCALEDOWN_SECONDS,
             "container_instance_id": self.container_instance_id,
             "model_manifest": self._read_model_manifest(),
             "timings": {
                 "infer_ms": infer_ms,
                 "export_ms": export_ms,
+                "persist_ms": persist_ms,
             },
         }
 
