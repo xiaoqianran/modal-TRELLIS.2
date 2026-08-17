@@ -38,13 +38,10 @@ cpu_runtime_image = (
 )
 
 # Official TRELLIS.2 stack: CUDA 12.4 + PyTorch 2.6.0.
-# Production is fixed to A100-80GB (Ampere), so use FlashAttention 2. FlashAttention 3
-# is Hopper-oriented and must not be forced into this production image.
+# Keep the prebuilt backend that has now completed all three TRELLIS sampling
+# stages on the real production run; do not replace a demonstrated working CUDA
+# path based only on generic hardware assumptions.
 CUDA_VERSION = "12.4.0"
-FLASH_ATTN2_WHEEL = (
-    "https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.3/"
-    "flash_attn-2.7.3+cu12torch2.6cxx11abiFALSE-cp310-cp310-linux_x86_64.whl"
-)
 PREBUILT_WHEELS = "https://github.com/JeffreyXiang/Storages/releases/download/Space_Wheels_251210"
 
 trellis2_image = (
@@ -97,7 +94,7 @@ trellis2_image = (
         "rm -rf /root/TRELLIS.2/o-voxel",
     )
     .pip_install(
-        FLASH_ATTN2_WHEEL,
+        f"{PREBUILT_WHEELS}/flash_attn_3-3.0.0b1-cp39-abi3-linux_x86_64.whl",
         f"{PREBUILT_WHEELS}/cumesh-0.0.1-cp310-cp310-linux_x86_64.whl",
         f"{PREBUILT_WHEELS}/flex_gemm-0.0.1-cp310-cp310-linux_x86_64.whl",
         f"{PREBUILT_WHEELS}/o_voxel-0.0.1-cp310-cp310-linux_x86_64.whl",
@@ -106,8 +103,8 @@ trellis2_image = (
     )
     .env(
         {
-            "ATTN_BACKEND": "flash_attn",
-            "SPARSE_ATTN_BACKEND": "flash_attn",
+            "ATTN_BACKEND": "flash_attn_3",
+            "SPARSE_ATTN_BACKEND": "flash_attn_3",
             "OPENCV_IO_ENABLE_OPENEXR": "1",
             "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
             "PYTHONPATH": "/root/TRELLIS.2",
