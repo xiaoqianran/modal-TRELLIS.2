@@ -11,6 +11,7 @@ from modal_trellis2.core.doctor import run_doctor
 from modal_trellis2.core.image import ImageError
 from modal_trellis2.core.jobs import JobStore
 from modal_trellis2.core.service import GenerateService, build_service
+from modal_trellis2.modal.weights import TRELLIS2_REPO
 
 router = APIRouter(prefix="/api")
 _settings = load_settings()
@@ -38,6 +39,7 @@ def meta() -> dict[str, Any]:
     return {
         "version": __version__,
         "dry_run": _settings.dry_run,
+        "model": TRELLIS2_REPO,
         "defaults": {
             "pipeline": _settings.default_pipeline,
             "gpu": _settings.default_gpu,

@@ -2,6 +2,39 @@ from __future__ import annotations
 
 import modal
 
+# CPU-only image for Volume prefetch. Do not put the TRELLIS CUDA stack here.
+cpu_image = (
+    modal.Image.debian_slim(python_version="3.12")
+    .pip_install("huggingface_hub[hf_transfer]>=0.30.0")
+    .env({"HF_HUB_ENABLE_HF_TRANSFER": "1"})
+)
+
+# CPU rembg / crop. Torch CPU only — never attach a GPU to this image.
+cpu_runtime_image = (
+    modal.Image.debian_slim(python_version="3.12")
+    .pip_install(
+        "torch==2.6.0",
+        "torchvision==0.21.0",
+        extra_index_url="https://download.pytorch.org/whl/cpu",
+    )
+    .pip_install(
+        "transformers==4.57.3",
+        "pillow==12.0.0",
+        "huggingface_hub>=0.30.0",
+        "safetensors",
+        "timm==1.0.22",
+        "kornia==0.8.2",
+        "einops",
+    )
+    .env(
+        {
+            "HF_HUB_OFFLINE": "1",
+            "TRANSFORMERS_OFFLINE": "1",
+            "HF_HUB_DISABLE_TELEMETRY": "1",
+        }
+    )
+)
+
 # Official TRELLIS.2 stack: CUDA 12.4 + PyTorch 2.6.0.
 # Native extensions come from JeffreyXiang's Space wheels (same set Meshii used),
 # so Modal does not compile flash-attn / o-voxel / nvdiffrast from source.

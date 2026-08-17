@@ -7,7 +7,7 @@
 图片字节 → ImageTo3DGenerator → GLB 文件
 ```
 
-CLI 和 Web 走同一条 Core。没有 GPU 时用 `MockGenerator` 回一个合法立方体，把上传、落盘、下载、三维预览先跑通。
+CLI 和 Web 走同一条 Core。默认 generator 是官方 `microsoft/TRELLIS.2-4B`。`--dry-run` 才用 `MockGenerator` 回立方体。
 
 ## 三个上游各自干什么
 
@@ -27,33 +27,35 @@ CLI / Web
 GenerateService          校验图片、建 job、验 GLB、落盘
     ↓
 ImageTo3DGenerator
-    ├── MockGenerator           --dry-run / 测试
-    └── ModalTrellis2Generator  已 deploy 的 Trellis2Worker
+    ├── ModalTrellis2Generator  默认：官方 TRELLIS.2-4B
+    └── MockGenerator           --dry-run / 测试
             ↓
-        prefetch_weights (CPU, Volume)
-            ↓
-        Trellis2Worker.generate (GPU)
-            pipeline.run → o_voxel.to_glb → bytes
+        prefetch.py        CPU：HF 下载 4B + DINOv3 + BiRefNet → Volume
+        CpuPreprocessor    CPU：BiRefNet 抠图（上传已有 alpha 则本地做）
+        Trellis2Worker     GPU：内存快照恢复 → .cuda() → run → to_glb
+                           scaledown_window=10，HF offline，不下载
 ```
+
+GPU 只做两件事：把已经在 CPU 里的权重量到显存，以及官方推理 / `to_glb`（nvdiffrast 必须 CUDA）。  
+下载、Volume 写入、抠图、crop 都不准占 GPU。空闲 10 秒释放 A100。
 
 Core **不** import `trellis2` / `torch`。GPU 镜像、wheel、HuggingFace 权重只活在 `src/modal_trellis2/modal/`。
 
 本地 Web 是 FastAPI，不是 `modal serve`，也不是官方 Gradio `app.py`。和 sana 一样：工作台在你机器上，贵的推理在 Modal。
 
-## 为什么先 dry-run
+## 默认就是官方权重
 
-TRELLIS.2-4B 至少 24GB 显存。512³ 官方 H100 大约 3 秒，Modal A100 会更慢、更贵。镜像还要装 flash-attn / o-voxel / nvdiffrast。
+HF 许可通过之后，不要再把 dry-run 当主路径。`prefetch` 已经把官方 4B、DINOv3、BiRefNet 写进 Volume。Web / CLI 默认 `--live`。
 
-如果第一天就把 Web 绑死在真实推理上，你会同时调试：上传、CORS、GLB 查看器、CUDA 镜像、HF 许可、OOM。  
-先让 Mock 回一个 `glTF` 头合法的立方体（颜色来自原图均值）。合同对了，再换 generator。
+dry-run 只留给没有 Modal、没有 GPU、或只想测上传/下载的时候。
 
 ## 建议顺序
 
-1. **合同（本仓库）**  
-   `POST /api/generate` 收图，`GET /api/assets/{id}.glb` 回文件。Web 用 three.js 转台看。
-2. **官方 GPU**  
-   `modal deploy -m modal_trellis2.modal.worker`  
-   先 `pipeline=512`、`texture_size=1024`。权重用 CPU `prefetch_weights` 写进 Volume，GPU 只加载。
+1. **合同**  
+   `POST /api/generate` 收图，`GET /api/assets/{id}.glb` 回文件。
+2. **官方 GPU（当前）**  
+   `modal-trellis2 prefetch`（CPU）→ `deploy` → `pipeline=512`。  
+   `health` 默认只查 Volume，不点 GPU。要探活 A100 才加 `--gpu`。
 3. **fast-trellis2**  
    worker 里换 sampler。API 已留 `accelerator` 字段，先不要实现。
 4. **再谈 Meshii 的后处理**  

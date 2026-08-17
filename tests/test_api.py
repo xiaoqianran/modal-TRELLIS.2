@@ -7,6 +7,13 @@ def test_health(client) -> None:
     assert response.json()["status"] == "ok"
 
 
+def test_meta_names_official_model(client) -> None:
+    response = client.get("/api/meta")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["model"] == "microsoft/TRELLIS.2-4B"
+
+
 def test_generate_returns_glb(client, sample_png: Path) -> None:
     response = client.post(
         "/api/generate",

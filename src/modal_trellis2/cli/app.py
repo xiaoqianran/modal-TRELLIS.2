@@ -36,9 +36,9 @@ def generate(
     out: Path | None = typer.Option(None, "--out", "-o", help="Write GLB here"),
     seed: int = typer.Option(42, "--seed"),
     pipeline: str = typer.Option("512", "--pipeline"),
-    dry_run: bool = typer.Option(True, "--dry-run/--live", help="Mock cube vs Modal GPU"),
+    dry_run: bool = typer.Option(False, "--dry-run/--live", help="Mock cube vs official TRELLIS.2-4B"),
 ) -> None:
-    """Image in, GLB file out."""
+    """Image in, official TRELLIS.2 GLB out. Pass --dry-run for a local cube."""
     settings = load_settings()
     service = build_service(settings, dry_run=dry_run)
     job = service.generate(image.read_bytes(), filename=image.name, seed=seed, pipeline=pipeline, dry_run=dry_run)
@@ -49,8 +49,11 @@ def generate(
     if out:
         out.write_bytes(glb_path.read_bytes())
         glb_path = out
-    kind = "dry-run cube" if job.dry_run else "TRELLIS.2"
+    kind = "dry-run cube" if job.dry_run else "official TRELLIS.2-4B"
     console.print(f"[green]{kind}[/green] {job.id} → {glb_path} ({job.glb_size_bytes} bytes, {job.latency_ms:.0f} ms)")
+    timings = (job.telemetry or {}).get("timings")
+    if timings:
+        console.print(timings)
 
 
 @app.command()
@@ -81,6 +84,81 @@ def doctor() -> None:
     console.print(table)
     if not report.ready:
         raise typer.Exit(1)
+
+
+@app.command()
+def health(
+    gpu: bool = typer.Option(False, "--gpu", help="Start an A100 to ping Trellis2Worker"),
+) -> None:
+    """CPU Volume check by default. Pass --gpu only when you want to start an A100."""
+    import modal
+
+    from modal_trellis2.modal.app import APP_NAME, app as modal_app
+    from modal_trellis2.modal.prefetch import prefetch_status
+    from modal_trellis2.modal.weights import TRELLIS2_REPO
+
+    if not gpu:
+        with modal.enable_output():
+            with modal_app.run():
+                payload = prefetch_status.remote()
+        console.print(payload)
+        if not payload.get("ok"):
+            console.print("Volume is missing official weights. Run `modal-trellis2 prefetch`.")
+            raise typer.Exit(1)
+        console.print(f"[green]cpu[/green] {TRELLIS2_REPO} on Volume, GPU not started")
+        return
+
+    try:
+        worker = modal.Cls.from_name(APP_NAME, "Trellis2Worker")()
+        payload = worker.health.remote()
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]official worker not reachable[/red] {exc}")
+        console.print("Run `modal-trellis2 deploy` after `modal-trellis2 prefetch`.")
+        raise typer.Exit(1) from exc
+    console.print(payload)
+    if not payload.get("ok"):
+        raise typer.Exit(1)
+    console.print(f"[green]official gpu[/green] {TRELLIS2_REPO} source={payload.get('source')}")
+
+
+@app.command()
+def prefetch(
+    status_only: bool = typer.Option(False, "--status", help="Only inspect the Volume"),
+) -> None:
+    """Download TRELLIS.2-4B onto the Modal Volume (CPU image only)."""
+    import modal
+
+    from modal_trellis2.modal.app import app as modal_app
+    from modal_trellis2.modal.prefetch import prefetch_status, prefetch_weights
+
+    if not status_only:
+        console.print("prefetching microsoft/TRELLIS.2-4B onto the Modal Volume…")
+    with modal.enable_output():
+        with modal_app.run():
+            payload = prefetch_status.remote() if status_only else prefetch_weights.remote()
+    console.print(payload)
+
+
+@app.command()
+def deploy() -> None:
+    """Build the CUDA image and deploy Trellis2Worker."""
+    import subprocess
+    import sys
+
+    cmd = [sys.executable, "-m", "modal", "deploy", "-m", "modal_trellis2.modal.deploy"]
+    console.print(" ".join(cmd))
+    raise typer.Exit(subprocess.call(cmd))
+
+
+@app.command("gpu-smoke")
+def gpu_smoke() -> None:
+    """Build the TRELLIS CUDA image and ping an A100. Does not load weights."""
+    import subprocess
+    import sys
+
+    cmd = [sys.executable, "-m", "modal", "run", "-m", "modal_trellis2.modal.gpu_smoke"]
+    console.print(" ".join(cmd))
+    raise typer.Exit(subprocess.call(cmd))
 
 
 @app.command()

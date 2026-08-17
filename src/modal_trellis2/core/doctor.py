@@ -32,10 +32,18 @@ def run_doctor(settings: Settings | None = None) -> DoctorReport:
         _optional_dir("vendor/fast-trellis2", Path("vendor/fast-trellis2")),
         _optional_dir("vendor/meshii", Path("vendor/meshii")),
         Check(
-            name="dry-run default",
+            name="generator",
             ok=True,
-            detail="on" if settings.dry_run else "off — this will call Modal if a worker is deployed",
+            detail=(
+                "dry-run mock cube"
+                if settings.dry_run
+                else "official microsoft/TRELLIS.2-4B via Modal"
+            ),
         ),
+        _env_present("HF_TOKEN"),
+        _command("gh", "gh"),
+        _command("modal", "modal"),
+        _modal_profile(),
     ]
     ready = all(check.ok for check in checks if check.name in {"data dir", "jobs dir"})
     return DoctorReport(ready=ready, version=__version__, checks=checks)
@@ -57,6 +65,26 @@ def _command(name: str, binary: str) -> Check:
     if found:
         return Check(name, True, found)
     return Check(name, False, f"{binary} not on PATH (optional; used to index vendor repos)")
+
+
+def _env_present(name: str) -> Check:
+    import os
+
+    from dotenv import dotenv_values
+
+    if os.environ.get(name):
+        return Check(name, True, "set")
+    values = dotenv_values(Path(".env"))
+    if values.get(name):
+        return Check(name, True, "set in .env")
+    return Check(name, False, f"{name} missing (optional for dry-run)")
+
+
+def _modal_profile() -> Check:
+    config = Path.home() / ".modal.toml"
+    if config.is_file():
+        return Check("modal token", True, str(config))
+    return Check("modal token", False, "~/.modal.toml missing — run modal token set")
 
 
 def _optional_dir(name: str, path: Path) -> Check:

@@ -33,8 +33,8 @@
       </div>
       <p class="contract">图片进去 · GLB 出来</p>
       <div class="status" id="status">
-        <span class="dot" data-mode="dry"></span>
-        <span id="status-label">dry-run</span>
+        <span class="dot" data-mode="live"></span>
+        <span id="status-label">official TRELLIS.2-4B</span>
       </div>
     </header>
 
@@ -69,12 +69,12 @@
           </div>
 
           <label class="switch">
-            <input id="dry-run" type="checkbox" checked />
-            <span>dry-run：本地立方体，不烧 GPU</span>
+            <input id="dry-run" type="checkbox" />
+            <span>dry-run：本地立方体，不走官方权重</span>
           </label>
 
-          <button type="submit" id="go">生成并放到转台上</button>
-          <p class="hint" id="hint">第一版只保证一件事：对面把文件还回来。</p>
+          <button type="submit" id="go">用官方 TRELLIS.2 生成</button>
+          <p class="hint" id="hint">权重 CPU 预取。GPU 只做推理，空闲 10 秒释放。勾上 dry-run 才用立方体。</p>
         </form>
       </section>
 
