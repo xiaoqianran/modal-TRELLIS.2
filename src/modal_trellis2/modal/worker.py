@@ -81,7 +81,6 @@ def _require_local_weights() -> str:
     buffer_containers=GPU_BUFFER_CONTAINERS,
     scaledown_window=GPU_SCALEDOWN_SECONDS,
     retries=0,
-    enable_memory_snapshot=True,
     block_network=True,
     env={
         "HF_HUB_OFFLINE": "1",
@@ -91,51 +90,57 @@ def _require_local_weights() -> str:
     },
 )
 class Trellis2Worker:
-    """Official TRELLIS.2. CPU snapshot loads weights; GPU only does .cuda() + run.
+    """Official TRELLIS.2 worker initialized only after the GPU is attached.
+
+    TRELLIS.2 imports flex_gemm/Triton while importing the pipeline. A normal
+    Modal CPU memory-snapshot phase has no GPU driver, so importing TRELLIS in
+    ``@modal.enter(snap=True)`` fails before weights can load. Keep snapshots
+    disabled here and initialize the local, prefetched pipeline in the regular
+    GPU lifecycle hook instead.
 
     Cost policy: this production worker has exactly one GPU container at a time.
     Bursty requests queue onto that container instead of scaling out to more GPUs.
     When the queue drains, the container scales to zero after the short idle window.
     """
 
-    @modal.enter(snap=True)
-    def load_cpu(self) -> None:
-        """Read the Volume into CPU RAM. Modal snapshots this. No GPU here."""
+    @modal.enter()
+    def setup_gpu(self) -> None:
+        """Load the offline pipeline only after Modal has attached the A100."""
         import sys
+        import uuid
+
+        import o_voxel
+        import torch
+
+        if not torch.cuda.is_available():
+            raise RuntimeError("Trellis2Worker requires CUDA before TRELLIS.2 is imported")
 
         model_volume.reload()
         if "/root/TRELLIS.2" not in sys.path:
             sys.path.insert(0, "/root/TRELLIS.2")
         _offline_env()
         weights = _require_local_weights()
+
+        # These imports transitively initialize flex_gemm/Triton. They must stay
+        # after the CUDA availability check; CPU-only memory snapshots have no
+        # active Triton driver and fail at import time.
         _use_local_dinov3()
         _skip_gpu_rembg()
-
         from trellis2.pipelines import Trellis2ImageTo3DPipeline
 
         Trellis2ImageTo3DPipeline.model_names_to_load = list(MODELS_512)
         self.pipeline = Trellis2ImageTo3DPipeline.from_pretrained(weights)
         self.pipeline.rembg_model = None
-        # 512-only weights fit these 80–96 GB GPUs. Keeping every stage resident
-        # removes six CPU↔GPU transfers that dominated the earlier 178 s run.
         self.pipeline.low_vram = False
-        self.weights_source = weights
-
-    @modal.enter(snap=False)
-    def move_to_gpu(self) -> None:
-        """The only GPU-side setup: attach CUDA and move the already-loaded pipeline."""
-        import uuid
-
-        import o_voxel
+        self.pipeline.cuda()
 
         self.o_voxel = o_voxel
-        self.pipeline.cuda()
-        # Returned in telemetry so burst tests can prove requests reused this exact container.
+        self.weights_source = weights
         self.container_instance_id = uuid.uuid4().hex
 
     @modal.method()
     def health(self) -> dict[str, Any]:
-        """Confirm the GPU container restored the snapshot and moved weights. Starts a GPU."""
+        """Confirm the GPU container loaded local weights and attached CUDA. Starts a GPU."""
         import torch
 
         weights = f"{MODEL_DIR}/trellis2"
