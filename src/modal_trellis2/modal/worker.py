@@ -12,9 +12,13 @@ from modal_trellis2.modal.image import trellis2_image
 from modal_trellis2.modal.volumes import MODEL_DIR, model_volume
 from modal_trellis2.modal.weights import (
     DINOV3_LOCAL,
+    GPU_BUFFER_CONTAINERS,
+    GPU_MAX_CONTAINERS,
+    GPU_MIN_CONTAINERS,
     GPU_SCALEDOWN_SECONDS,
     MODELS_1024,
     MODELS_512,
+    PRODUCTION_GPU,
     TRELLIS2_REPO,
 )
 
@@ -65,13 +69,13 @@ def _require_local_weights() -> str:
 
 
 @app.cls(
-    gpu="A100-80GB",
+    gpu=PRODUCTION_GPU,
     image=trellis2_image,
     volumes={MODEL_DIR: model_volume},
     timeout=30 * 60,
-    min_containers=0,
-    max_containers=1,
-    buffer_containers=0,
+    min_containers=GPU_MIN_CONTAINERS,
+    max_containers=GPU_MAX_CONTAINERS,
+    buffer_containers=GPU_BUFFER_CONTAINERS,
     scaledown_window=GPU_SCALEDOWN_SECONDS,
     retries=0,
     enable_memory_snapshot=True,
@@ -137,9 +141,9 @@ class Trellis2Worker:
             "low_vram": self.pipeline.low_vram,
             "vram_gb": round(torch.cuda.get_device_properties(0).total_memory / 2**30, 1),
             "scaledown_window": GPU_SCALEDOWN_SECONDS,
-            "min_containers": 0,
-            "max_containers": 1,
-            "buffer_containers": 0,
+            "min_containers": GPU_MIN_CONTAINERS,
+            "max_containers": GPU_MAX_CONTAINERS,
+            "buffer_containers": GPU_BUFFER_CONTAINERS,
             "repo": TRELLIS2_REPO,
         }
 
