@@ -38,9 +38,13 @@ cpu_runtime_image = (
 )
 
 # Official TRELLIS.2 stack: CUDA 12.4 + PyTorch 2.6.0.
-# Native extensions come from JeffreyXiang's Space wheels (same set Meshii used),
-# so Modal does not compile flash-attn / o-voxel / nvdiffrast from source.
+# Production is fixed to A100-80GB (Ampere), so use FlashAttention 2. FlashAttention 3
+# is Hopper-oriented and must not be forced into this production image.
 CUDA_VERSION = "12.4.0"
+FLASH_ATTN2_WHEEL = (
+    "https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.3/"
+    "flash_attn-2.7.3+cu12torch2.6cxx11abiFALSE-cp310-cp310-linux_x86_64.whl"
+)
 PREBUILT_WHEELS = "https://github.com/JeffreyXiang/Storages/releases/download/Space_Wheels_251210"
 
 trellis2_image = (
@@ -93,7 +97,7 @@ trellis2_image = (
         "rm -rf /root/TRELLIS.2/o-voxel",
     )
     .pip_install(
-        f"{PREBUILT_WHEELS}/flash_attn_3-3.0.0b1-cp39-abi3-linux_x86_64.whl",
+        FLASH_ATTN2_WHEEL,
         f"{PREBUILT_WHEELS}/cumesh-0.0.1-cp310-cp310-linux_x86_64.whl",
         f"{PREBUILT_WHEELS}/flex_gemm-0.0.1-cp310-cp310-linux_x86_64.whl",
         f"{PREBUILT_WHEELS}/o_voxel-0.0.1-cp310-cp310-linux_x86_64.whl",
@@ -102,8 +106,8 @@ trellis2_image = (
     )
     .env(
         {
-            "ATTN_BACKEND": "flash_attn_3",
-            "SPARSE_ATTN_BACKEND": "flash_attn_3",
+            "ATTN_BACKEND": "flash_attn",
+            "SPARSE_ATTN_BACKEND": "flash_attn",
             "OPENCV_IO_ENABLE_OPENEXR": "1",
             "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
             "PYTHONPATH": "/root/TRELLIS.2",
