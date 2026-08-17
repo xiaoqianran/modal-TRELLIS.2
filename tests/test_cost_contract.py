@@ -74,12 +74,11 @@ def test_trellis_source_and_primary_model_revisions_are_pinned() -> None:
     assert "git clone --depth 1" not in image
 
 
-def test_a100_production_uses_flash_attention_2_not_fa3() -> None:
+def test_production_preserves_runtime_validated_flash_attention_backend() -> None:
     image = Path("src/modal_trellis2/modal/image.py").read_text(encoding="utf-8")
-    assert "flash_attn-2.7.3+cu12torch2.6" in image
-    assert '"ATTN_BACKEND": "flash_attn"' in image
-    assert '"SPARSE_ATTN_BACKEND": "flash_attn"' in image
-    assert "flash_attn_3" not in image
+    assert "flash_attn_3-3.0.0b1" in image
+    assert '"ATTN_BACKEND": "flash_attn_3"' in image
+    assert '"SPARSE_ATTN_BACKEND": "flash_attn_3"' in image
 
 
 def test_trellis_import_never_runs_in_cpu_memory_snapshot() -> None:
@@ -98,11 +97,18 @@ def test_gpu_worker_never_late_loads_missing_models() -> None:
     assert "_require_loaded_models" in worker
 
 
-def test_generated_glb_has_rpc_safety_guard() -> None:
-    weights = Path("src/modal_trellis2/modal/weights.py").read_text(encoding="utf-8")
+def test_large_glb_uses_volume_not_function_return_blob() -> None:
+    volumes = Path("src/modal_trellis2/modal/volumes.py").read_text(encoding="utf-8")
     worker = Path("src/modal_trellis2/modal/worker.py").read_text(encoding="utf-8")
-    assert "MAX_MODAL_RESULT_BYTES = 90 * 1024 * 1024" in weights
-    assert "len(payload) > MAX_MODAL_RESULT_BYTES" in worker
+    generator = Path("src/modal_trellis2/modal/generator.py").read_text(encoding="utf-8")
+
+    assert 'OUTPUT_VOLUME_NAME = "modal-trellis2-results"' in volumes
+    assert "OUTPUT_DIR: output_volume" in worker
+    assert "output_volume.commit()" in worker
+    assert '"output_path": relative_output' in worker
+    assert '"glb_bytes": payload' not in worker
+    assert "output_volume.read_file(output_path)" in generator
+    assert "output_volume.remove_file(output_path)" in generator
 
 
 def test_live_generation_runs_cpu_bundle_preflight_before_gpu_lookup() -> None:
@@ -118,3 +124,10 @@ def test_catchable_gpu_init_errors_do_not_escape_enter_hook() -> None:
     assert "self.init_error = None" in worker
     assert "self.init_error = f\"{type(exc).__name__}: {exc}\"" in worker
     assert "GPU initialization failed: {self.init_error}" in worker
+
+
+def test_gpu_method_returns_portable_error_metadata() -> None:
+    worker = Path("src/modal_trellis2/modal/worker.py").read_text(encoding="utf-8")
+    assert '"ok": False' in worker
+    assert '"error_type": type(exc).__name__' in worker
+    assert '"error": str(exc)' in worker
