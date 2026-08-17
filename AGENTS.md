@@ -38,8 +38,10 @@ Normal implementation, refactoring, tests, documentation, and local debugging **
 - Live generation must run deployed CPU `prefetch_status` before looking up `Trellis2Worker`; an incomplete Volume must never be discovered after A100 launch.
 - Production currently accepts only `pipeline=512`. Higher-resolution pipelines remain experimental until separately GPU-validated.
 - Keep TRELLIS.2 source pinned to `75fbf0183001ed9876c8dbb35de6b68552ee08bd` and the primary HF model bundle pinned to `af44b45f2e35a493886929c6d786e563ec68364d`.
-- Production A100 uses FlashAttention 2 (`flash_attn`), currently the torch-2.6/CUDA-12 v2.7.3 wheel. Do not force `flash_attn_3` into the fixed A100 image.
-- Keep input-cost guards: upload <=20MB, decoded image <=40MP, normalize longest side <=1024 before remote calls, production `texture_size` in `{256, 512, 1024}`, GLB RPC payload <90MB, and Web live batch <=20 images.
+- Preserve the currently runtime-validated `flash_attn_3` backend/wheel for this TRELLIS image. Do not swap attention backends from generic hardware assumptions; change it only with an explicit live benchmark/compatibility test.
+- Keep input-cost guards: upload <=20MB, decoded image <=40MP, normalize longest side <=1024 before remote calls, production `texture_size` in `{256, 512, 1024}`, and Web live batch <=20 images.
+- Keep large GLB transfer on `modal-trellis2-results`: GPU writes + commits a temporary file, local client verifies/downloads it, JobStore persists the durable copy, then the remote temporary file is removed.
+- Preserve VRAM telemetry (`after_load`, `before_infer`, `after_infer`, `after_export`, `after_cleanup`) so every paid run records the real memory envelope.
 
 ## Architecture
 
@@ -54,6 +56,7 @@ Local CLI/Web own jobs and the GLB workbench. Modal owns GPU inference.
 - GPU `Trellis2Worker` deliberately does **not** use CPU Memory Snapshots: TRELLIS.2 imports `flex_gemm`/Triton at pipeline import time, and Modal CPU snapshot hooks have no GPU driver.
 - Catchable Python exceptions during GPU initialization are stored as `init_error` instead of escaping `@modal.enter()`. `health/generate` then report a normal method failure so Python-level startup errors do not become deployed-container crash loops.
 - The GPU worker never late-loads a missing model after `.cuda()`. Missing production models are a hard preflight/init error.
+- Generated GLBs are temporary files on `modal-trellis2-results`; the local generator downloads and verifies size before deleting the remote copy. The local JobStore is the durable user-facing copy.
 - Production GPU policy is cost-first: fixed `A100-80GB`, `min_containers=0`, `max_containers=1`, `buffer_containers=0`, `scaledown_window=10`. Bursty jobs queue onto the one warm GPU container instead of scaling out.
 - Production generation must not use `Cls.with_options(gpu=...)`; dynamic GPU variants create separate autoscaling pools and can bypass the one-container cost cap. Benchmark/experimentation with other GPU types belongs in a separate path.
 - Live GPU needs gated `facebook/dinov3-vitl16-pretrain-lvd1689m` accepted on the HF account behind `HF_TOKEN` **before prefetch**. After that the GPU never talks to Hugging Face.
