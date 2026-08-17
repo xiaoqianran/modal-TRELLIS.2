@@ -15,7 +15,11 @@ class GlbError(ValueError):
 
 
 def is_glb(data: bytes) -> bool:
-    return len(data) >= 12 and data[:4] == GLB_MAGIC and struct.unpack_from("<I", data, 4)[0] == GLB_VERSION
+    return (
+        len(data) >= 12
+        and data[:4] == GLB_MAGIC
+        and struct.unpack_from("<I", data, 4)[0] == GLB_VERSION
+    )
 
 
 def validate_glb(data: bytes) -> None:

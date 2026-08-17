@@ -6,8 +6,8 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
+from modal_trellis2.application import build_service
 from modal_trellis2.core.config import Settings
-from modal_trellis2.core.service import build_service
 from modal_trellis2.web.api import configure
 from modal_trellis2.web.server import create_app
 

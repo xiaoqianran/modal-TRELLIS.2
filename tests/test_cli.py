@@ -25,3 +25,9 @@ def test_cli_doctor(tmp_path: Path, monkeypatch) -> None:
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0, result.output
     assert "data dir" in result.output
+
+
+def test_cli_gpu_reuse_probe_requires_explicit_cost_confirmation(sample_png: Path) -> None:
+    result = runner.invoke(app, ["verify-gpu-reuse", str(sample_png)])
+    assert result.exit_code == 2
+    assert "Refusing to start GPU" in result.output

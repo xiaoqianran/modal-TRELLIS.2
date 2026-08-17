@@ -317,3 +317,62 @@ button:disabled {
     animation: none !important;
   }
 }
+
+.queue-panel {
+  margin-top: 0.8rem;
+  border: 1px solid var(--line);
+  background: rgba(22, 20, 26, 0.45);
+}
+
+.queue-head {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid var(--line);
+  color: var(--fog);
+  font: 500 0.72rem/1.2 "IBM Plex Mono", monospace;
+}
+
+#queue-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 150px;
+  overflow: auto;
+}
+
+#queue-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.7rem;
+  padding: 0.45rem 0.6rem;
+  border-bottom: 1px solid rgba(242, 235, 224, 0.06);
+  font: 400 0.74rem/1.2 "IBM Plex Mono", monospace;
+}
+
+#queue-list li:last-child {
+  border-bottom: 0;
+}
+
+#queue-list span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#queue-list small {
+  color: var(--fog);
+}
+
+#queue-list li[data-state="running"] small {
+  color: var(--copper);
+}
+
+#queue-list li[data-state="completed"] small {
+  color: var(--teal);
+}
+
+
+#queue-list li[data-state="failed"] small {
+  color: #e08a78;
+}

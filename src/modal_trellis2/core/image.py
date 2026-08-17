@@ -5,6 +5,7 @@ import io
 from PIL import Image, UnidentifiedImageError
 
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
+MAX_IMAGE_PIXELS = 40_000_000
 ALLOWED_MODES = {"RGB", "RGBA", "L", "P"}
 
 
@@ -19,6 +20,8 @@ def load_image(data: bytes) -> Image.Image:
         raise ImageError("image larger than 20MB")
     try:
         image = Image.open(io.BytesIO(data))
+        if image.width * image.height > MAX_IMAGE_PIXELS:
+            raise ImageError("image exceeds 40 megapixels")
         image.load()
     except UnidentifiedImageError as exc:
         raise ImageError("not a readable image") from exc

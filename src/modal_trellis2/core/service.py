@@ -2,102 +2,134 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from modal_trellis2.core.generator import GenerateRequest
-from modal_trellis2.core.ids import new_job_id
-from modal_trellis2.core.jobs import JobRecord, JobStore
+from modal_trellis2.core.config import (
+    MAX_SEED,
+    MIN_SEED,
+    PIPELINES,
+    TEXTURE_SIZES,
+    Settings,
+)
+from modal_trellis2.core.generator import GenerateRequest, ImageTo3DGenerator
+from modal_trellis2.core.glb import GlbError, validate_glb
+from modal_trellis2.core.image import encode_png, load_image
+from modal_trellis2.core.jobs import Job, JobStore
 
 
 class GenerateService:
-    def __init__(self, data_dir: Path, dry_run: bool = False) -> None:
-        self.data_dir = Path(data_dir)
-        self.store = JobStore(self.data_dir)
-        self.dry_run = dry_run
+    """Product contract: validated image bytes in, persisted GLB job out."""
 
-    def _generator(self, dry_run: bool):
-        if dry_run:
-            from modal_trellis2.core.mock import MockGenerator
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        store: JobStore | None = None,
+        generator: ImageTo3DGenerator | None = None,
+        dry_run: bool | None = None,
+    ) -> None:
+        self.settings = settings
+        self.store = store or JobStore(settings)
+        if generator is None:
+            raise ValueError("GenerateService requires an ImageTo3DGenerator")
+        self.generator = generator
+        self.dry_run = settings.dry_run if dry_run is None else dry_run
 
-            return MockGenerator()
-        from modal_trellis2.modal.generator import ModalTrellis2Generator
-
-        return ModalTrellis2Generator()
-
-    def generate_bytes(
+    def generate(
         self,
         image_bytes: bytes,
         *,
-        filename: str = "image.png",
-        pipeline: str = "512",
-        seed: int = 42,
+        filename: str = "input.png",
+        seed: int | None = None,
+        pipeline: str | None = None,
         texture_size: int = 1024,
         remesh: bool = True,
-        dry_run: bool | None = None,
-    ) -> JobRecord:
-        job_id = new_job_id()
-        output_dir = self.data_dir / "outputs"
-        output_dir.mkdir(parents=True, exist_ok=True)
-        output_path = output_dir / f"{job_id}.glb"
-        effective_dry_run = self.dry_run if dry_run is None else dry_run
-
-        job = JobRecord(
-            id=job_id,
-            status="running",
-            input_name=filename,
-            output_path=str(output_path),
-            pipeline=pipeline,
-            seed=seed,
-            dry_run=effective_dry_run,
-        )
-        self.store.put(job)
-
-        generator = self._generator(effective_dry_run)
-        result = generator.generate(
-            GenerateRequest(
-                job_id=job_id,
-                image_bytes=image_bytes,
-                pipeline=pipeline,
-                seed=seed,
-                texture_size=texture_size,
-                remesh=remesh,
+    ) -> Job:
+        selected_pipeline = self.settings.default_pipeline if pipeline is None else pipeline
+        if selected_pipeline not in PIPELINES:
+            raise ValueError(
+                f"unknown pipeline {selected_pipeline!r}; choose one of {', '.join(PIPELINES)}"
             )
-        )
-        if not result.ok:
-            job.status = "failed"
-            job.error = result.error or "generation failed"
-            job.latency_ms = result.latency_ms
-            job.telemetry = result.telemetry
-            self.store.put(job)
-            return job
+        if texture_size not in TEXTURE_SIZES:
+            allowed = ", ".join(str(value) for value in TEXTURE_SIZES)
+            raise ValueError(f"unsupported texture_size {texture_size}; choose one of {allowed}")
 
-        output_path.write_bytes(result.glb_bytes or b"")
-        job.status = "completed"
-        job.latency_ms = result.latency_ms
-        job.glb_size_bytes = output_path.stat().st_size
-        job.telemetry = result.telemetry
-        self.store.put(job)
-        return job
+        selected_seed = self.settings.default_seed if seed is None else seed
+        if not MIN_SEED <= selected_seed <= MAX_SEED:
+            raise ValueError(f"seed must be between {MIN_SEED} and {MAX_SEED}")
+
+        # Input errors are caller errors, not failed remote jobs. Validate before creating a Job.
+        image = load_image(image_bytes)
+        png = encode_png(image)
+
+        job = self.store.create(
+            filename=filename,
+            seed=selected_seed,
+            pipeline=selected_pipeline,
+            dry_run=self.dry_run,
+        )
+        self.store.save_image(job, png)
+        self.store.mark(job, "running")
+
+        request = GenerateRequest(
+            job_id=job.id,
+            image_bytes=png,
+            pipeline=selected_pipeline,
+            seed=selected_seed,
+            texture_size=texture_size,
+            remesh=remesh,
+        )
+        result = None
+        try:
+            result = self.generator.generate(request)
+            if result.error:
+                raise RuntimeError(result.error)
+            if not result.glb_bytes:
+                raise RuntimeError("generator returned no GLB")
+            validate_glb(result.glb_bytes)
+        except (GlbError, RuntimeError, ValueError) as exc:
+            return self.store.mark(
+                job,
+                "failed",
+                error=str(exc),
+                latency_ms=result.latency_ms if result is not None else 0.0,
+                telemetry=result.telemetry if result is not None else {},
+            )
+
+        job.glb_filename = result.filename
+        self.store.save_glb(job, result.glb_bytes)
+        return self.store.mark(
+            job,
+            "completed",
+            latency_ms=result.latency_ms,
+            dry_run=result.dry_run,
+            telemetry=result.telemetry,
+            glb_filename=result.filename,
+            glb_size_bytes=len(result.glb_bytes),
+        )
 
     def generate_path(
         self,
         image_path: Path,
         output_path: Path,
         *,
-        pipeline: str = "512",
-        seed: int = 42,
+        pipeline: str | None = None,
+        seed: int | None = None,
         texture_size: int = 1024,
         remesh: bool = True,
-    ) -> JobRecord:
-        job = self.generate_bytes(
-            Path(image_path).read_bytes(),
-            filename=Path(image_path).name,
+    ) -> Job:
+        source = Path(image_path)
+        job = self.generate(
+            source.read_bytes(),
+            filename=source.name,
             pipeline=pipeline,
             seed=seed,
             texture_size=texture_size,
             remesh=remesh,
         )
-        if job.status == "completed" and job.output_path:
+        if job.status == "completed":
             target = Path(output_path)
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(Path(job.output_path).read_bytes())
-            job.output_path = str(target)
+            target.write_bytes(self.store.glb_path(job.id).read_bytes())
         return job
+
+
+__all__ = ["GenerateService"]

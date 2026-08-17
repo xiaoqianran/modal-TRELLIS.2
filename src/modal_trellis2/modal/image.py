@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import modal
 
+from modal_trellis2.modal.weights import TRELLIS2_SOURCE_REVISION
+
 # CPU-only image for Volume prefetch. Do not put the TRELLIS CUDA stack here.
 cpu_image = (
     modal.Image.debian_slim(python_version="3.12")
@@ -79,10 +81,15 @@ trellis2_image = (
         "timm==1.0.22",
         "huggingface_hub",
         "safetensors",
-        "git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8",
+        (
+            "git+https://github.com/EasternJournalist/utils3d.git"
+            "@9a4eb15e4021b67b12c460c7057d642626897ec8"
+        ),
     )
     .run_commands(
-        "cd /root && git clone --depth 1 --recursive https://github.com/microsoft/TRELLIS.2.git",
+        "cd /root && git clone https://github.com/microsoft/TRELLIS.2.git",
+        f"cd /root/TRELLIS.2 && git checkout --detach {TRELLIS2_SOURCE_REVISION}",
+        "cd /root/TRELLIS.2 && git submodule update --init --recursive",
         "rm -rf /root/TRELLIS.2/o-voxel",
     )
     .pip_install(

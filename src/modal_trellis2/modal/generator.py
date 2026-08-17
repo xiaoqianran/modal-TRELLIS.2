@@ -82,13 +82,17 @@ class ModalTrellis2Generator:
             telemetry={
                 "backend": "official-trellis2",
                 "model": payload.get("source") or "microsoft/TRELLIS.2-4B",
+                "source_revision": payload.get("source_revision"),
                 "pipeline": payload.get("pipeline", request.pipeline),
                 "seed": payload.get("seed", request.seed),
                 "size_bytes": payload.get("size_bytes"),
                 "gpu": PRODUCTION_GPU,
                 "gpu_policy": "fixed-production-pool",
                 "offline": payload.get("offline", True),
+                "network_blocked": payload.get("network_blocked", True),
                 "scaledown_window": payload.get("scaledown_window"),
+                "container_instance_id": payload.get("container_instance_id"),
+                "model_manifest": payload.get("model_manifest"),
                 "timings": timings,
             },
         )

@@ -3,12 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Protocol
 
+from modal_trellis2.core.config import PipelineType
+
 
 @dataclass(slots=True)
 class GenerateRequest:
     job_id: str
     image_bytes: bytes
-    pipeline: str = "512"
+    pipeline: PipelineType = "512"
     seed: int = 42
     texture_size: int = 1024
     remesh: bool = True
@@ -18,6 +20,7 @@ class GenerateRequest:
 class GenerateResult:
     job_id: str
     glb_bytes: bytes | None = None
+    filename: str = "mesh.glb"
     error: str | None = None
     latency_ms: float = 0.0
     dry_run: bool = False
@@ -29,4 +32,6 @@ class GenerateResult:
 
 
 class ImageTo3DGenerator(Protocol):
+    """One normalized image in, one GLB out. No GPU choice belongs in this contract."""
+
     def generate(self, request: GenerateRequest) -> GenerateResult: ...

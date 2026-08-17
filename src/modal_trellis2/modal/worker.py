@@ -16,10 +16,13 @@ from modal_trellis2.modal.weights import (
     GPU_MAX_CONTAINERS,
     GPU_MIN_CONTAINERS,
     GPU_SCALEDOWN_SECONDS,
-    MODELS_1024,
+    GPU_TIMEOUT_SECONDS,
     MODELS_512,
     PRODUCTION_GPU,
+    PRODUCTION_PIPELINES,
+    PRODUCTION_TEXTURE_SIZES,
     TRELLIS2_REPO,
+    TRELLIS2_SOURCE_REVISION,
 )
 
 # GPU is offline. Weights come from the CPU Volume. Do not import this
@@ -72,13 +75,14 @@ def _require_local_weights() -> str:
     gpu=PRODUCTION_GPU,
     image=trellis2_image,
     volumes={MODEL_DIR: model_volume},
-    timeout=30 * 60,
+    timeout=GPU_TIMEOUT_SECONDS,
     min_containers=GPU_MIN_CONTAINERS,
     max_containers=GPU_MAX_CONTAINERS,
     buffer_containers=GPU_BUFFER_CONTAINERS,
     scaledown_window=GPU_SCALEDOWN_SECONDS,
     retries=0,
     enable_memory_snapshot=True,
+    block_network=True,
     env={
         "HF_HUB_OFFLINE": "1",
         "TRANSFORMERS_OFFLINE": "1",
@@ -120,10 +124,14 @@ class Trellis2Worker:
     @modal.enter(snap=False)
     def move_to_gpu(self) -> None:
         """The only GPU-side setup: attach CUDA and move the already-loaded pipeline."""
+        import uuid
+
         import o_voxel
 
         self.o_voxel = o_voxel
         self.pipeline.cuda()
+        # Returned in telemetry so burst tests can prove requests reused this exact container.
+        self.container_instance_id = uuid.uuid4().hex
 
     @modal.method()
     def health(self) -> dict[str, Any]:
@@ -138,23 +146,35 @@ class Trellis2Worker:
             "weights_local": os.path.exists(f"{weights}/pipeline.json"),
             "source": getattr(self, "weights_source", weights),
             "offline": os.environ.get("HF_HUB_OFFLINE") == "1",
+            "network_blocked": True,
             "low_vram": self.pipeline.low_vram,
             "vram_gb": round(torch.cuda.get_device_properties(0).total_memory / 2**30, 1),
             "scaledown_window": GPU_SCALEDOWN_SECONDS,
+            "timeout_seconds": GPU_TIMEOUT_SECONDS,
             "min_containers": GPU_MIN_CONTAINERS,
             "max_containers": GPU_MAX_CONTAINERS,
             "buffer_containers": GPU_BUFFER_CONTAINERS,
             "repo": TRELLIS2_REPO,
+            "source_revision": TRELLIS2_SOURCE_REVISION,
+            "production_pipelines": list(PRODUCTION_PIPELINES),
+            "container_instance_id": self.container_instance_id,
+            "model_manifest": self._read_model_manifest(),
         }
 
     @modal.method()
-    def warmup(self, image_bytes: bytes, seed: int = 42, pipeline_type: str = "512") -> dict[str, Any]:
+    def warmup(
+        self,
+        image_bytes: bytes,
+        seed: int = 42,
+        pipeline_type: str = "512",
+    ) -> dict[str, Any]:
         """Compile/warm CUDA kernels without running GLB postprocessing."""
         import time
 
         import torch
         from PIL import Image
 
+        self._require_production_pipeline(pipeline_type)
         image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         started = time.perf_counter()
         mesh = self.pipeline.run(
@@ -191,6 +211,7 @@ class Trellis2Worker:
         from PIL import Image
 
         started = time.perf_counter()
+        self._require_production_request(pipeline_type, texture_size)
         self._ensure_models(pipeline_type)
         image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         infer_started = time.perf_counter()
@@ -233,16 +254,45 @@ class Trellis2Worker:
             "texture_size": texture_size,
             "remesh": remesh,
             "source": getattr(self, "weights_source", f"{MODEL_DIR}/trellis2"),
+            "source_revision": TRELLIS2_SOURCE_REVISION,
             "offline": True,
+            "network_blocked": True,
             "scaledown_window": GPU_SCALEDOWN_SECONDS,
+            "container_instance_id": self.container_instance_id,
+            "model_manifest": self._read_model_manifest(),
             "timings": {
                 "infer_ms": infer_ms,
                 "export_ms": export_ms,
             },
         }
 
+    def _require_production_request(self, pipeline_type: str, texture_size: int) -> None:
+        self._require_production_pipeline(pipeline_type)
+        if texture_size not in PRODUCTION_TEXTURE_SIZES:
+            allowed = ", ".join(str(value) for value in PRODUCTION_TEXTURE_SIZES)
+            raise ValueError(
+                f"texture_size {texture_size} is not enabled in production; allowed: {allowed}"
+            )
+
+    def _require_production_pipeline(self, pipeline_type: str) -> None:
+        if pipeline_type not in PRODUCTION_PIPELINES:
+            allowed = ", ".join(PRODUCTION_PIPELINES)
+            raise ValueError(
+                f"pipeline {pipeline_type!r} is not enabled in production; allowed: {allowed}"
+            )
+
+    def _read_model_manifest(self) -> dict[str, Any] | None:
+        path = f"{MODEL_DIR}/manifest.json"
+        try:
+            with open(path, encoding="utf-8") as handle:
+                payload = json.load(handle)
+            return payload if isinstance(payload, dict) else None
+        except (OSError, json.JSONDecodeError):
+            return None
+
     def _ensure_models(self, pipeline_type: str) -> None:
-        needed = MODELS_512 if pipeline_type == "512" else MODELS_1024
+        self._require_production_pipeline(pipeline_type)
+        needed = MODELS_512
         missing = [name for name in needed if name not in self.pipeline.models]
         if not missing:
             return

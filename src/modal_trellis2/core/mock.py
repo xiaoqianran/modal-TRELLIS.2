@@ -32,6 +32,9 @@ class MockGenerator:
                 "width": image.width,
                 "height": image.height,
                 "color": [round(c, 4) for c in color],
-                "note": "Placeholder cube tinted from the upload. Swap MockGenerator for ModalTrellis2Generator when GPU is ready.",
+                "note": (
+                    "Placeholder cube tinted from the upload. Swap MockGenerator for "
+                    "ModalTrellis2Generator when GPU is ready."
+                ),
             },
         )

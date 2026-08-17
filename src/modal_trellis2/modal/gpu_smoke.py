@@ -17,7 +17,9 @@ def gpu_smoke() -> dict[str, object]:
         "ok": torch.cuda.is_available(),
         "cuda": torch.cuda.is_available(),
         "device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
-        "capability": list(torch.cuda.get_device_capability(0)) if torch.cuda.is_available() else None,
+        "capability": (
+            list(torch.cuda.get_device_capability(0)) if torch.cuda.is_available() else None
+        ),
         "torch": torch.__version__,
     }
 

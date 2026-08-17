@@ -42,24 +42,36 @@
       <section class="bench" aria-label="上传">
         <form id="form">
           <label class="drop" id="drop" for="file">
-            <input id="file" name="image" type="file" accept="image/png,image/jpeg,image/webp" required />
+            <input
+              id="file"
+              name="image"
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              multiple
+              required
+            />
             <div class="polaroid" id="preview-wrap" hidden>
               <img id="preview" alt="上传预览" />
             </div>
             <div class="drop-copy" id="drop-copy">
               <strong>把参考图放到台面上</strong>
-              <span>PNG / JPEG / WebP，一张就够</span>
+              <span>PNG / JPEG / WebP，可一次放多张，按顺序串行生成</span>
             </div>
           </label>
+
+          <div class="queue-panel" id="queue-panel" hidden>
+            <div class="queue-head">
+              <span>串行队列</span>
+              <span id="queue-summary">0 / 0</span>
+            </div>
+            <ol id="queue-list"></ol>
+          </div>
 
           <div class="dials">
             <label>
               管线
               <select id="pipeline" name="pipeline">
-                <option value="512" selected>512³ · 先跑通</option>
-                <option value="1024">1024³</option>
-                <option value="1024_cascade">1024 cascade</option>
-                <option value="1536_cascade">1536 cascade</option>
+                <option value="512" selected>512³ · production</option>
               </select>
             </label>
             <label>
@@ -73,8 +85,8 @@
             <span>dry-run：本地立方体，不走官方权重</span>
           </label>
 
-          <button type="submit" id="go">用官方 TRELLIS.2 生成</button>
-          <p class="hint" id="hint">权重 CPU 预取。GPU 只做推理，空闲 10 秒释放。勾上 dry-run 才用立方体。</p>
+          <button type="submit" id="go">按队列生成</button>
+          <p class="hint" id="hint">权重 CPU 预取。多图按顺序逐个提交，尽量复用同一个 warm GPU；空闲 10 秒释放。</p>
         </form>
       </section>
 
