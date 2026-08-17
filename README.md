@@ -28,7 +28,31 @@ modal-trellis2 web
 
 打开 http://127.0.0.1:7863 。默认 **官方 TRELLIS.2-4B**，`pipeline=512`。  
 权重只在 CPU prefetch 下载。GPU 离线加载 Volume，空闲 **10 秒**释放。  
+生产 GPU 固定为 **A100-80GB**，最多 **1 个 GPU container**；连续请求排队并优先复用同一个 warm container，不会因为突发提交横向扩成多张 GPU。  
 只有勾上 dry-run / 传 `--dry-run` 才会回立方体。
+
+## 成本策略
+
+```text
+Hugging Face
+    ↓
+CPU prefetch → Modal Volume
+                  ↓
+RGB 上传 → CPU rembg（可 warm 5 分钟）
+                  ↓
+              GPU Queue
+                  ↓
+        唯一 A100-80GB container
+           job1 → job2 → job3
+                  ↓
+             idle 10 sec
+                  ↓
+              scale to zero
+```
+
+生产 worker 明确使用：`min_containers=0`、`max_containers=1`、`buffer_containers=0`、`scaledown_window=10`；普通生成路径不使用动态 `with_options(gpu=...)`。GPU 设置 `HF_HUB_OFFLINE=1` / `TRANSFORMERS_OFFLINE=1`，不会在昂贵 GPU 上下载模型。
+
+需要测试其他 GPU 时应走独立 benchmark/实验路径，不要改变生产生成请求的 GPU 配置。
 
 ## 接口
 
