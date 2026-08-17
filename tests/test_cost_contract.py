@@ -67,3 +67,12 @@ def test_trellis_source_revision_is_pinned() -> None:
     assert 'TRELLIS2_SOURCE_REVISION = "75fbf0183001ed9876c8dbb35de6b68552ee08bd"' in weights
     assert "git checkout --detach {TRELLIS2_SOURCE_REVISION}" in image
     assert "git clone --depth 1" not in image
+
+
+def test_trellis_import_never_runs_in_cpu_memory_snapshot() -> None:
+    worker = Path("src/modal_trellis2/modal/worker.py").read_text(encoding="utf-8")
+    assert "enable_memory_snapshot=True" not in worker
+    assert not any(line.strip() == "@modal.enter(snap=True)" for line in worker.splitlines())
+    assert "@modal.enter()" in worker
+    assert 'if not torch.cuda.is_available()' in worker
+    assert "from trellis2.pipelines import Trellis2ImageTo3DPipeline" in worker
