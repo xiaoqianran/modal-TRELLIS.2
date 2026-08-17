@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -12,6 +13,7 @@ from modal_trellis2.core.config import Settings
 from modal_trellis2.core.ids import new_id
 
 JobStatus = Literal["pending", "running", "completed", "failed"]
+_JOB_ID_RE = re.compile(r"^job_[0-9A-HJKMNP-TV-Z]{26}$")
 
 
 class Job(BaseModel):
@@ -63,7 +65,7 @@ class JobStore:
     def list_jobs(self, limit: int | None = None) -> list[Job]:
         jobs = [
             Job.model_validate_json(path.read_text(encoding="utf-8"))
-            for path in self.root.glob("*/meta.json")
+            for path in self.root.glob("job_*/meta.json")
         ]
         jobs.sort(key=lambda job: job.created_at, reverse=True)
         return jobs if limit is None else jobs[: max(0, limit)]
@@ -74,7 +76,8 @@ class JobStore:
         return path
 
     def save_glb(self, job: Job, glb_bytes: bytes) -> Path:
-        path = self._dir(job.id) / job.glb_filename
+        filename = _safe_filename(job.glb_filename)
+        path = self._dir(job.id) / filename
         path.write_bytes(glb_bytes)
         job.glb_size_bytes = len(glb_bytes)
         self._write(job)
@@ -82,14 +85,14 @@ class JobStore:
 
     def glb_path(self, job_id: str) -> Path:
         job = self.get(job_id)
-        path = self.root / job_id / job.glb_filename
+        path = self._dir_path(job_id) / _safe_filename(job.glb_filename)
         if not path.is_file():
             raise FileNotFoundError(job_id)
         return path
 
     def image_path(self, job_id: str) -> Path:
         self.get(job_id)
-        path = self.root / job_id / "input.png"
+        path = self._dir_path(job_id) / "input.png"
         if not path.is_file():
             raise FileNotFoundError(job_id)
         return path
@@ -103,13 +106,18 @@ class JobStore:
         self._write(job)
         return job
 
+    def _dir_path(self, job_id: str) -> Path:
+        if not _JOB_ID_RE.fullmatch(job_id):
+            raise KeyError(job_id)
+        return self.root / job_id
+
     def _dir(self, job_id: str) -> Path:
-        path = self.root / job_id
+        path = self._dir_path(job_id)
         path.mkdir(parents=True, exist_ok=True)
         return path
 
     def _meta_path(self, job_id: str, *, create: bool = True) -> Path:
-        base = self._dir(job_id) if create else self.root / job_id
+        base = self._dir(job_id) if create else self._dir_path(job_id)
         return base / "meta.json"
 
     def _write(self, job: Job) -> None:
@@ -121,6 +129,13 @@ class JobStore:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(tmp, path)
+
+
+def _safe_filename(filename: str) -> str:
+    safe = Path(filename).name
+    if not safe or safe != filename:
+        raise ValueError("invalid job asset filename")
+    return safe
 
 
 def _now() -> str:
