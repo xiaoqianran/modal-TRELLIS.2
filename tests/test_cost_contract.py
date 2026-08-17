@@ -103,3 +103,18 @@ def test_generated_glb_has_rpc_safety_guard() -> None:
     worker = Path("src/modal_trellis2/modal/worker.py").read_text(encoding="utf-8")
     assert "MAX_MODAL_RESULT_BYTES = 90 * 1024 * 1024" in weights
     assert "len(payload) > MAX_MODAL_RESULT_BYTES" in worker
+
+
+def test_live_generation_runs_cpu_bundle_preflight_before_gpu_lookup() -> None:
+    generator = Path("src/modal_trellis2/modal/generator.py").read_text(encoding="utf-8")
+    preflight = generator.index('modal.Function.from_name(APP_NAME, "prefetch_status")')
+    gpu_lookup = generator.index('modal.Cls.from_name(APP_NAME, "Trellis2Worker")')
+    assert preflight < gpu_lookup
+    assert "CPU preflight failed before GPU launch" in generator
+
+
+def test_catchable_gpu_init_errors_do_not_escape_enter_hook() -> None:
+    worker = Path("src/modal_trellis2/modal/worker.py").read_text(encoding="utf-8")
+    assert "self.init_error = None" in worker
+    assert "self.init_error = f\"{type(exc).__name__}: {exc}\"" in worker
+    assert "GPU initialization failed: {self.init_error}" in worker
