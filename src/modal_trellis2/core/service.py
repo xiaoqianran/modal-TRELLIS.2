@@ -56,8 +56,8 @@ class GenerateService:
         if not MIN_SEED <= selected_seed <= MAX_SEED:
             raise ValueError(f"seed must be between {MIN_SEED} and {MAX_SEED}")
 
-        # Caller errors are rejected before a Job exists. Normalization also caps the
-        # longest side at 1024 so a compressed upload cannot expand into a huge PNG RPC.
+        # Caller errors are rejected before a Job exists. Keep a bounded lossless
+        # local JobStore copy; the Modal adapter performs its own inline-safe JPEG transport.
         image = load_image(image_bytes)
         png = encode_png(image)
 

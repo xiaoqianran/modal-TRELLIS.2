@@ -6,6 +6,7 @@ from typing import Any
 
 import modal
 
+from modal_trellis2.core.image import encode_remote_jpeg
 from modal_trellis2.core.preprocess import crop_to_foreground
 from modal_trellis2.modal.app import app
 from modal_trellis2.modal.image import cpu_runtime_image
@@ -93,9 +94,7 @@ class CpuPreprocessor:
         alpha = transforms_to_pil(mask).resize(image.size)
         image.putalpha(alpha)
         cropped = crop_to_foreground(image)
-        buffer = io.BytesIO()
-        cropped.save(buffer, format="PNG")
-        return buffer.getvalue()
+        return encode_remote_jpeg(cropped)
 
     @modal.method()
     def health(self) -> dict[str, Any]:

@@ -109,6 +109,50 @@ def test_large_glb_uses_volume_not_function_return_blob() -> None:
     assert '"glb_bytes": payload' not in worker
     assert "output_volume.read_file(output_path)" in generator
     assert "output_volume.remove_file(output_path)" in generator
+    assert "expected_output_path = f\"jobs/{request.job_id}/mesh.glb\"" in generator
+
+
+def test_remote_images_are_kept_below_modal_blob_threshold() -> None:
+    image = Path("src/modal_trellis2/core/image.py").read_text(encoding="utf-8")
+    preprocess = Path("src/modal_trellis2/modal/preprocess.py").read_text(encoding="utf-8")
+    generator = Path("src/modal_trellis2/modal/generator.py").read_text(encoding="utf-8")
+
+    assert "MAX_REMOTE_IMAGE_BYTES = 1_800_000" in image
+    assert "encode_remote_jpeg(cropped)" in preprocess
+    assert "_require_inline_image" in generator
+
+
+def test_output_volume_symbols_exist_as_one_contract() -> None:
+    volumes = Path("src/modal_trellis2/modal/volumes.py").read_text(encoding="utf-8")
+    assert 'MODEL_VOLUME_NAME = "modal-trellis2-weights"' in volumes
+    assert 'OUTPUT_VOLUME_NAME = "modal-trellis2-results"' in volumes
+    assert 'OUTPUT_DIR = "/outputs"' in volumes
+    assert "output_volume = modal.Volume.from_name(" in volumes
+
+
+def test_live_generation_runs_cpu_bundle_preflight_before_gpu_lookup() -> None:
+    generator = Path("src/modal_trellis2/modal/generator.py").read_text(encoding="utf-8")
+    preflight = generator.index('modal.Function.from_name(APP_NAME, "prefetch_status")')
+    gpu_lookup = generator.index('modal.Cls.from_name(APP_NAME, "Trellis2Worker")')
+    assert preflight < gpu_lookup
+    assert "CPU preflight failed before GPU launch" in generator
+
+
+def test_catchable_gpu_init_errors_do_not_escape_enter_hook() -> None:
+    worker = Path("src/modal_trellis2/modal/worker.py").read_text(encoding="utf-8")
+    assert "self.init_error = None" in worker
+    assert "self.init_error = _compact_error(exc)" in worker
+    assert "GPU initialization failed: {self.init_error}" in worker
+    setup = worker.split("def setup_gpu", 1)[1].split("def _initialize_gpu", 1)[0]
+    assert "import torch" not in setup
+    assert "self._initialize_gpu()" in setup
+
+
+def test_gpu_method_returns_portable_error_metadata() -> None:
+    worker = Path("src/modal_trellis2/modal/worker.py").read_text(encoding="utf-8")
+    assert '"ok": False' in worker
+    assert '"error_type": type(exc).__name__' in worker
+    assert '"error": _compact_error(exc)' in worker
 
 
 def test_gpu_vram_is_recorded_for_load_infer_export_and_cleanup() -> None:
@@ -124,25 +168,3 @@ def test_gpu_vram_is_recorded_for_load_infer_export_and_cleanup() -> None:
     assert '"after_export": vram_after_export' in worker
     assert '"after_cleanup": vram_after_cleanup' in worker
     assert '"vram": payload.get("vram")' in generator
-
-
-def test_live_generation_runs_cpu_bundle_preflight_before_gpu_lookup() -> None:
-    generator = Path("src/modal_trellis2/modal/generator.py").read_text(encoding="utf-8")
-    preflight = generator.index('modal.Function.from_name(APP_NAME, "prefetch_status")')
-    gpu_lookup = generator.index('modal.Cls.from_name(APP_NAME, "Trellis2Worker")')
-    assert preflight < gpu_lookup
-    assert "CPU preflight failed before GPU launch" in generator
-
-
-def test_catchable_gpu_init_errors_do_not_escape_enter_hook() -> None:
-    worker = Path("src/modal_trellis2/modal/worker.py").read_text(encoding="utf-8")
-    assert "self.init_error = None" in worker
-    assert "self.init_error = f\"{type(exc).__name__}: {exc}\"" in worker
-    assert "GPU initialization failed: {self.init_error}" in worker
-
-
-def test_gpu_method_returns_portable_error_metadata() -> None:
-    worker = Path("src/modal_trellis2/modal/worker.py").read_text(encoding="utf-8")
-    assert '"ok": False' in worker
-    assert '"error_type": type(exc).__name__' in worker
-    assert '"error": str(exc)' in worker

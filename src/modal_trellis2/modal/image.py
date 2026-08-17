@@ -7,8 +7,8 @@ from modal_trellis2.modal.weights import TRELLIS2_SOURCE_REVISION
 # CPU-only image for Volume prefetch. Do not put the TRELLIS CUDA stack here.
 cpu_image = (
     modal.Image.debian_slim(python_version="3.12")
-    .pip_install("huggingface_hub[hf_transfer]>=0.30.0")
-    .env({"HF_HUB_ENABLE_HF_TRANSFER": "1"})
+    .pip_install("huggingface_hub>=0.34.0")
+    .env({"HF_XET_HIGH_PERFORMANCE": "1"})
 )
 
 # CPU rembg / crop. Torch CPU only — never attach a GPU to this image.

@@ -29,17 +29,16 @@ uv run modal-trellis2 web
 
 打开 http://127.0.0.1:7863 。默认 **官方 TRELLIS.2-4B**，当前生产合同只开放 `pipeline=512`。  
 权重只在 CPU prefetch 下载。GPU 离线加载 Volume，空闲 **10 秒**释放。  
-生产 GPU 固定为 **A100-80GB**，最多 **1 个 GPU container**；连续请求排队并优先复用同一个 warm container，不会因为突发提交横向扩成多张 GPU。当前 TRELLIS 镜像保留已经进入生产验证路径的 **`flash_attn_3`** backend；后续不要仅凭通用硬件判断切换 attention backend，必须单独做 live 兼容性/性能验证。  
-只有勾上 dry-run / 传 `--dry-run` 才会回立方体。生产输入限制为：上传文件 ≤20MB、解码后 ≤4000 万像素、进入远程处理前最长边缩到 ≤1024、`texture_size` 只能是 `256/512/1024`；Web live 队列一次最多 20 张。
-
-生成后的大 GLB 不直接塞进 Function 返回值：GPU 先写临时 `modal-trellis2-results` Volume，只返回小 metadata；本地 Modal client 再下载并校验文件大小，JobStore 落盘成功后删除远程临时副本。这样本地 JobStore 仍然是最终用户文件的唯一持久副本。
+Modal Function 的大输入/输出会使用对象存储，因此本仓库把远程图片硬控在 2 MiB 以下，并把 GLB 改走 Volume；不要重新把 `glb_bytes` 直接从 `Trellis2Worker.generate()` return。  
+生产 GPU 固定为 **A100-80GB**，最多 **1 个 GPU container**；连续请求排队并优先复用同一个 warm container，不会因为突发提交横向扩成多张 GPU。当前保留真实 A100 运行已经完成三段 TRELLIS 采样验证的 **FlashAttention 3** 后端，不再基于泛化硬件结论擅自切换。  
+只有勾上 dry-run / 传 `--dry-run` 才会回立方体。生产输入限制为：上传文件 ≤20MB、解码后 ≤4000 万像素、进入远程处理前最长边缩到 ≤1024，并自适应编码成 **≤1,800,000 bytes** 的 JPEG；`texture_size` 只能是 `256/512/1024`；Web live 队列一次最多 20 张。
 
 ## 成本策略
 
 ```text
 Hugging Face
     ↓
-CPU prefetch + 完整性校验 → model Volume
+CPU prefetch + 完整性校验 → Modal Volume
                   ↓
         CPU preflight（ok=true?）
                   ↓
@@ -50,16 +49,18 @@ RGB 上传 → CPU rembg（可 warm 5 分钟）
         唯一 A100-80GB container
            job1 → job2 → job3
                   ↓
-         临时 result Volume
+      results Volume → 本地 JobStore
                   ↓
-        本地下载 / 校验 / JobStore
+             idle 10 sec
                   ↓
-       删除远程临时 GLB 副本
+              scale to zero
 ```
 
-生产 worker 明确使用：`min_containers=0`、`max_containers=1`、`buffer_containers=0`、`scaledown_window=10`、单输入最长 10 分钟；普通生成路径不使用动态 `with_options(gpu=...)`，也不使用 `@modal.concurrent`。GPU 设置 `HF_HUB_OFFLINE=1` / `TRANSFORMERS_OFFLINE=1`，并启用 `block_network=True`，运行时不会在昂贵 GPU 上下载模型。
+生产 worker 明确使用：`min_containers=0`、`max_containers=1`、`buffer_containers=0`、`scaledown_window=10`、单输入最长 10 分钟；普通生成路径不使用动态 `with_options(gpu=...)`，也不使用 `@modal.concurrent`。GPU 设置 `HF_HUB_OFFLINE=1` / `TRANSFORMERS_OFFLINE=1`，并启用 `block_network=True`，运行时整个外网被封死，不会在昂贵 GPU 上下载模型。
 
-每次 GPU health / generation 都记录显存数据；generation telemetry 包含 `after_load`、`before_infer`、`after_infer`、`after_export`、`after_cleanup`，并记录 `allocated/reserved/peak/free/total`。第一次正式 512 run 后应直接看这些字段判断 A100 80GB 的真实显存余量，不再靠估计。
+**大 GLB 不再作为 Modal Function 返回值。** GPU 把 `mesh.glb` 写到独立的 `modal-trellis2-results` Volume 并 `commit()`，Function 只返回很小的路径/尺寸/telemetry；本地 Modal 客户端随后用 `Volume.read_file()` 拉回 GLB，校验尺寸后 `remove_file()` 清理临时远端文件。这样 `block_network=True` 与大文件传输不再互相冲突。
+
+每次真实 GPU generation 还会记录 `vram.after_load / before_infer / after_infer / after_export / after_cleanup`，每个阶段包含 allocated / reserved / peak / free / total；后续判断 A100-80GB 的真实显存余量，直接看 telemetry，不再靠估算。
 
 需要测试其他 GPU 时应走独立 benchmark/实验路径，不要改变生产生成请求的 GPU 配置。
 
