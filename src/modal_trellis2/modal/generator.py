@@ -4,6 +4,7 @@ import time
 
 from modal_trellis2.core.generator import GenerateRequest, GenerateResult
 from modal_trellis2.core.preprocess import prepare_image
+from modal_trellis2.modal.weights import PRODUCTION_GPU
 
 
 class ModalTrellis2Generator:
@@ -84,7 +85,7 @@ class ModalTrellis2Generator:
                 "pipeline": payload.get("pipeline", request.pipeline),
                 "seed": payload.get("seed", request.seed),
                 "size_bytes": payload.get("size_bytes"),
-                "gpu": "A100-80GB",
+                "gpu": PRODUCTION_GPU,
                 "gpu_policy": "fixed-production-pool",
                 "offline": payload.get("offline", True),
                 "scaledown_window": payload.get("scaledown_window"),
