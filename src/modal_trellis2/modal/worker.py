@@ -3,12 +3,14 @@ from __future__ import annotations
 import io
 import json
 import os
+from pathlib import Path
 from typing import Any
 
 import modal
 
 from modal_trellis2.modal.app import app
 from modal_trellis2.modal.image import trellis2_image
+from modal_trellis2.modal.model_bundle import require_hf_model_dir, require_trellis_bundle
 from modal_trellis2.modal.volumes import MODEL_DIR, model_volume
 from modal_trellis2.modal.weights import (
     DINOV3_LOCAL,
@@ -17,10 +19,12 @@ from modal_trellis2.modal.weights import (
     GPU_MIN_CONTAINERS,
     GPU_SCALEDOWN_SECONDS,
     GPU_TIMEOUT_SECONDS,
+    MAX_MODAL_RESULT_BYTES,
     MODELS_512,
     PRODUCTION_GPU,
     PRODUCTION_PIPELINES,
     PRODUCTION_TEXTURE_SIZES,
+    TRELLIS2_MODEL_REVISION,
     TRELLIS2_REPO,
     TRELLIS2_SOURCE_REVISION,
 )
@@ -37,15 +41,14 @@ def _offline_env() -> None:
 
 
 def _use_local_dinov3() -> None:
-    """Point the official image encoder at the CPU-prefetched folder."""
+    """Point the official image encoder at the fully validated CPU-prefetched folder."""
     from trellis2.modules.image_feature_extractor import DinoV3FeatureExtractor
 
     local = f"{MODEL_DIR}/{DINOV3_LOCAL}"
     original = DinoV3FeatureExtractor.__init__
 
     def patched(self, model_name: str, image_size: int = 512):  # type: ignore[no-untyped-def]
-        if os.path.isfile(os.path.join(local, "config.json")):
-            model_name = local
+        model_name = local
         original(self, model_name, image_size)
 
     DinoV3FeatureExtractor.__init__ = patched  # type: ignore[method-assign]
@@ -61,14 +64,11 @@ def _skip_gpu_rembg() -> None:
     rembg.BiRefNet.__init__ = no_op
 
 
-def _require_local_weights() -> str:
-    weights = f"{MODEL_DIR}/trellis2"
-    if not os.path.exists(f"{weights}/pipeline.json"):
-        raise RuntimeError(
-            "Official TRELLIS.2-4B is not on the Volume. "
-            "Run `modal-trellis2 prefetch` on CPU first. GPU will not download."
-        )
-    return weights
+def _require_local_weights() -> tuple[str, dict[str, Any]]:
+    weights = Path(MODEL_DIR) / "trellis2"
+    bundle = require_trellis_bundle(weights)
+    require_hf_model_dir(Path(MODEL_DIR) / DINOV3_LOCAL, label="DINOv3")
+    return str(weights), bundle
 
 
 @app.cls(
@@ -105,7 +105,7 @@ class Trellis2Worker:
 
     @modal.enter()
     def setup_gpu(self) -> None:
-        """Load the offline pipeline only after Modal has attached the A100."""
+        """Validate the offline bundle, then import TRELLIS after CUDA is attached."""
         import sys
         import uuid
 
@@ -119,7 +119,7 @@ class Trellis2Worker:
         if "/root/TRELLIS.2" not in sys.path:
             sys.path.insert(0, "/root/TRELLIS.2")
         _offline_env()
-        weights = _require_local_weights()
+        weights, bundle_validation = _require_local_weights()
 
         # These imports transitively initialize flex_gemm/Triton. They must stay
         # after the CUDA availability check; CPU-only memory snapshots have no
@@ -132,15 +132,17 @@ class Trellis2Worker:
         self.pipeline = Trellis2ImageTo3DPipeline.from_pretrained(weights)
         self.pipeline.rembg_model = None
         self.pipeline.low_vram = False
+        self._require_loaded_models()
         self.pipeline.cuda()
 
         self.o_voxel = o_voxel
         self.weights_source = weights
+        self.bundle_validation = bundle_validation
         self.container_instance_id = uuid.uuid4().hex
 
     @modal.method()
     def health(self) -> dict[str, Any]:
-        """Confirm the GPU container loaded local weights and attached CUDA. Starts a GPU."""
+        """Confirm the GPU container loaded the complete pinned bundle. Starts a GPU."""
         import torch
 
         weights = f"{MODEL_DIR}/trellis2"
@@ -148,7 +150,7 @@ class Trellis2Worker:
             "ok": self.pipeline is not None,
             "cuda": torch.cuda.is_available(),
             "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
-            "weights_local": os.path.exists(f"{weights}/pipeline.json"),
+            "weights_local": bool(getattr(self, "bundle_validation", {}).get("ok")),
             "source": getattr(self, "weights_source", weights),
             "offline": os.environ.get("HF_HUB_OFFLINE") == "1",
             "network_blocked": True,
@@ -161,8 +163,10 @@ class Trellis2Worker:
             "buffer_containers": GPU_BUFFER_CONTAINERS,
             "repo": TRELLIS2_REPO,
             "source_revision": TRELLIS2_SOURCE_REVISION,
+            "model_revision": TRELLIS2_MODEL_REVISION,
             "production_pipelines": list(PRODUCTION_PIPELINES),
             "container_instance_id": self.container_instance_id,
+            "bundle_validation": self.bundle_validation,
             "model_manifest": self._read_model_manifest(),
         }
 
@@ -180,6 +184,7 @@ class Trellis2Worker:
         from PIL import Image
 
         self._require_production_pipeline(pipeline_type)
+        self._require_loaded_models()
         image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         started = time.perf_counter()
         mesh = self.pipeline.run(
@@ -218,7 +223,7 @@ class Trellis2Worker:
 
         started = time.perf_counter()
         self._require_production_request(pipeline_type, texture_size)
-        self._ensure_models(pipeline_type)
+        self._require_loaded_models()
         image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         infer_started = time.perf_counter()
         mesh = self.pipeline.run(
@@ -230,7 +235,7 @@ class Trellis2Worker:
         infer_ms = (time.perf_counter() - infer_started) * 1000
         mesh.simplify(16_777_216)
         export_started = time.perf_counter()
-        target = decimation_target or (500_000 if pipeline_type == "512" else 1_000_000)
+        target = decimation_target or 500_000
         glb = self.o_voxel.postprocess.to_glb(
             vertices=mesh.vertices,
             faces=mesh.faces,
@@ -249,6 +254,12 @@ class Trellis2Worker:
         buffer = io.BytesIO()
         glb.export(buffer, file_type="glb")
         payload = buffer.getvalue()
+        if len(payload) > MAX_MODAL_RESULT_BYTES:
+            raise RuntimeError(
+                "Generated GLB exceeds the Modal RPC safety limit "
+                f"({len(payload)} > {MAX_MODAL_RESULT_BYTES} bytes). "
+                "Reduce texture_size or decimation target."
+            )
         export_ms = (time.perf_counter() - export_started) * 1000
         return {
             "glb_bytes": payload,
@@ -261,6 +272,7 @@ class Trellis2Worker:
             "remesh": remesh,
             "source": getattr(self, "weights_source", f"{MODEL_DIR}/trellis2"),
             "source_revision": TRELLIS2_SOURCE_REVISION,
+            "model_revision": TRELLIS2_MODEL_REVISION,
             "offline": True,
             "network_blocked": True,
             "scaledown_window": GPU_SCALEDOWN_SECONDS,
@@ -287,6 +299,15 @@ class Trellis2Worker:
                 f"pipeline {pipeline_type!r} is not enabled in production; allowed: {allowed}"
             )
 
+    def _require_loaded_models(self) -> None:
+        missing = [name for name in MODELS_512 if name not in self.pipeline.models]
+        if missing:
+            raise RuntimeError(
+                "Pinned TRELLIS.2 pipeline did not load all production models: "
+                + ", ".join(missing)
+                + ". Re-run CPU prefetch; do not late-load models inside a running GPU container."
+            )
+
     def _read_model_manifest(self) -> dict[str, Any] | None:
         path = f"{MODEL_DIR}/manifest.json"
         try:
@@ -295,18 +316,3 @@ class Trellis2Worker:
             return payload if isinstance(payload, dict) else None
         except (OSError, json.JSONDecodeError):
             return None
-
-    def _ensure_models(self, pipeline_type: str) -> None:
-        self._require_production_pipeline(pipeline_type)
-        needed = MODELS_512
-        missing = [name for name in needed if name not in self.pipeline.models]
-        if not missing:
-            return
-        from trellis2 import models
-
-        weights = getattr(self, "weights_source", _require_local_weights())
-        with open(f"{weights}/pipeline.json", encoding="utf-8") as handle:
-            spec = json.load(handle)["args"]["models"]
-        for name in missing:
-            self.pipeline.models[name] = models.from_pretrained(f"{weights}/{spec[name]}")
-            self.pipeline.models[name].eval()
